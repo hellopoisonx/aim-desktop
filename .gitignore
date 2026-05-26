@@ -1,0 +1,46 @@
+# FVM Version Cache
+.fvm/
+
+# Flutter/Dart
+.dart_tool/
+.metadata
+.packages
+build/
+*.iml
+.idea/
+
+# Android
+android/.gradle/
+android/app/build/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+
+# iOS
+ios/.generated/
+ios/Flutter/Generated.xcconfig
+ios/Pods/
+ios/Podfile.lock
+*.xcworkspace
+
+# macOS
+macos/Flutter/Generated.xcconfig
+macos/Pods/
+macos/Podfile.lock
+
+# Linux
+linux/flutter/ephemeral/
+
+# Windows
+windows/flutter/ephemeral/
+
+# Web
+web/.dart_tool/
+
+# Misc
+*.log
+*.pyc
+*.swp
+.DS_Store
+pubspec.lock
