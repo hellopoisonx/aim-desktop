@@ -43,4 +43,8 @@ web/.dart_tool/
 *.pyc
 *.swp
 .DS_Store
-pubspec.lock
+
+# Environment files
+.env
+.env.staging
+.env.prod

@@ -6,13 +6,10 @@
 
 使用 `fvm` 进行版本管理
 
-## 开发文档
-
-`dev_docs/` 下包含所有 REST API 和 ws 帧协议相关内容
-
 ## UI
 
-`Material3`
+- 组件库: `Material3`
+- 页面布局: `ui_examples/`
 
 ## 状态管理框架
 
@@ -21,3 +18,23 @@
 ## 网络请求
 
 [dio](https://github.com/cfug/dio)
+
+## 开发手册
+
+`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/docs/client_implement_instruction.md`
+
+客户端实现以该手册及其引用的 REST OpenAPI、WS 协议和 Proto 文件为准；应用内不再包含演示账号或内置 mock 数据。
+
+## 本地缓存
+
+[drift](https://pub.dev/packages/drift)
+
+## 配置与运行
+
+默认 Gateway 地址为 `http://127.0.0.1:8888`。可通过以下方式覆盖：
+
+```bash
+fvm flutter run --dart-define=AIM_GATEWAY_URL=https://gateway.example.com --dart-define=AIM_ENV_NAME=prod
+```
+
+也可以在本地 `.env` 中配置 `AIM_GATEWAY_URL` / `AIM_ENV_NAME`（不要提交真实密钥或个人配置）。
