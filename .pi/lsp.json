@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "id": "dartls",
+      "enabled": true,
+      "include": ["**/*.dart"],
+      "rootMarkers": ["pubspec.yaml"],
+      "bin": "/home/hpxx/fvm/versions/3.44.0/bin/dart",
+      "args": ["language-server"],
+      "cwd": "{root}",
+      "languageIdByExtension": { ".dart": "dart" },
+      "startupTimeoutMs": 45000,
+      "diagnosticsWaitMs": 1500,
+      "initializationOptions": {},
+      "settings": {}
+    }
+  ]
+}
