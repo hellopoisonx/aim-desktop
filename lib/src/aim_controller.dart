@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 
 import 'data/aim_repository.dart';
 import 'data/database.dart';
@@ -995,6 +996,9 @@ class AimController extends ChangeNotifier {
     } catch (error) {
       _state = _state.copyWith(connectionOnline: false);
       _emitNotice(_readableError(error));
+      if (_isAuthError(error)) {
+        await _forceLogout('登录已过期，请重新登录');
+      }
     }
   }
 
@@ -1195,13 +1199,18 @@ class AimController extends ChangeNotifier {
         // 没有本地缓存，阻塞等待远端数据
         await _loadAuthenticatedState(restored, '会话已恢复');
       }
-    } catch (_) {
-      if (!hasLocalCache) {
+    } catch (error) {
+      if (_isAuthError(error)) {
+        // 认证失败：refresh token 无效，清除所有状态，回到登录页
+        await _tokenStorage.clearSession();
+        _state = AimState.initial().copyWith(isBusy: false);
+        notifyListeners();
+      } else if (!hasLocalCache) {
         await _tokenStorage.clearSession();
         _state = AimState.initial().copyWith(isBusy: false);
         notifyListeners();
       } else {
-        // 远端恢复失败，但本地缓存仍可用
+        // 网络错误但本地缓存仍可用
         _state = _state.copyWith(
           notice: '服务器连接失败，显示离线缓存',
           noticeSerial: _state.noticeSerial + 1,
@@ -1292,6 +1301,20 @@ class AimController extends ChangeNotifier {
           ? [currentUserId]
           : const [],
     );
+
+    // Phase 0: 附件解析状态更新推送 (manual §11.4)。
+    // 服务端通过 PUSH_MESSAGE (is_system=true, sender_id=0,
+    // message_type=image/video/audio) 推送解析完成后的更新。
+    // 按 file_id 匹配本地消息并原地更新 content。
+    if (event.isSystem &&
+        event.senderId == 0 &&
+        (event.messageType == 'image' ||
+            event.messageType == 'video' ||
+            event.messageType == 'audio')) {
+      _handleAttachmentParseUpdate(event);
+      return;
+    }
+
     // Phase 1: 检查是否为本人刚发送消息的回显 PUSH。
     // 服务器 ACK 和 PUSH_MESSAGE 到达顺序不确定：若 PUSH 先到且不带
     // client_msg_id，现有去重会失效，产生重复消息。这里用
@@ -1373,6 +1396,90 @@ class AimController extends ChangeNotifier {
         ),
       );
     }
+    notifyListeners();
+  }
+
+  /// 处理附件解析状态更新推送 (manual §11.4)。
+  ///
+  /// 服务端在附件异步解析完成后，通过 PUSH_MESSAGE 推送更新：
+  /// - is_system=true, sender_id=0, message_type=image/video/audio
+  /// - content 为更新后的 aim.attachment.v1 JSON
+  /// - 按 file_id 匹配本地消息并原地更新
+  void _handleAttachmentParseUpdate(RealtimeMessageEvent event) {
+    final payload = AttachmentMessagePayload.tryParse(event.content);
+    if (payload == null) return;
+
+    final fileId = payload.fileId;
+    if (fileId.isEmpty) return;
+
+    // 在该会话的消息列表中查找相同 file_id 的附件消息
+    final messages = _state.messagesFor(event.conversationId);
+    bool updated = false;
+    final updatedMessages = messages.map((msg) {
+      // 尝试解析消息内容中的附件 payload
+      final existing = AttachmentMessagePayload.tryParse(msg.content);
+      if (existing != null && existing.fileId == fileId) {
+        // 原地更新：保留旧的 downloadUrl/thumbnailFileId/thumbnailUrl（如果新推送中为空）
+        final merged = payload.copyWith(
+          downloadUrl: payload.downloadUrl.isNotEmpty
+              ? payload.downloadUrl
+              : existing.downloadUrl,
+          thumbnailFileId: payload.thumbnailFileId.isNotEmpty
+              ? payload.thumbnailFileId
+              : existing.thumbnailFileId,
+          thumbnailUrl: payload.thumbnailUrl.isNotEmpty
+              ? payload.thumbnailUrl
+              : existing.thumbnailUrl,
+          localPreviewDataUri: payload.localPreviewDataUri.isNotEmpty
+              ? payload.localPreviewDataUri
+              : existing.localPreviewDataUri,
+        );
+        updated = true;
+        return msg.copyWith(
+          content: merged.toJsonString(includeLocalPreview: false),
+        );
+      }
+      return msg;
+    }).toList();
+
+    if (!updated) {
+      // 未在本地消息中找到匹配的 file_id，可能消息尚未拉取
+      // 或附件在其他会话中。忽略此次更新推送。
+      return;
+    }
+
+    _state = _state.copyWith(
+      messagesByConversation: {
+        ..._state.messagesByConversation,
+        event.conversationId: updatedMessages,
+      },
+    );
+
+    // 同步更新附件列表中匹配的附件条目
+    if (payload.parseStatus == 'ready') {
+      _state = _state.copyWith(
+        attachments: _state.attachments.map((att) {
+          if (att.id == fileId) {
+            return att.copyWith(
+              parseStatus: payload.parseStatus,
+              thumbnailFileId: payload.thumbnailFileId.isNotEmpty
+                  ? payload.thumbnailFileId
+                  : att.thumbnailFileId,
+              thumbnailUrl: payload.thumbnailUrl.isNotEmpty
+                  ? payload.thumbnailUrl
+                  : att.thumbnailUrl,
+              width: payload.width,
+              height: payload.height,
+              downloadUrl: payload.downloadUrl.isNotEmpty
+                  ? payload.downloadUrl
+                  : att.downloadUrl,
+            );
+          }
+          return att;
+        }).toList(),
+      );
+    }
+
     notifyListeners();
   }
 
@@ -1733,6 +1840,44 @@ class AimController extends ChangeNotifier {
   String _readableError(Object error) {
     if (error is ArgumentError) return error.message.toString();
     return '操作失败：$error';
+  }
+
+  /// 检查是否是认证相关错误（401 或 code=40100）
+  bool _isAuthError(Object error) {
+    if (error is DioException) {
+      // Check response body for auth error codes
+      final data = error.response?.data;
+      if (data is Map) {
+        final code = data['code'];
+        if (code == 40100) return true;
+      }
+      // Also check HTTP status code
+      final statusCode = error.response?.statusCode;
+      if (statusCode == 401 || statusCode == 40100) return true;
+    }
+    // Check if the error message indicates auth failure
+    final message = error.toString().toLowerCase();
+    if (message.contains('401') || message.contains('unauthorized')) {
+      return true;
+    }
+    return false;
+  }
+
+  /// 强制退出登录，清除所有状态并回到登录页。
+  Future<void> _forceLogout(String message) async {
+    _stopTokenRefreshTimer();
+    await _realtimeSubscription?.cancel();
+    _realtimeSubscription = null;
+    for (final timer in _typingClearTimers.values) {
+      timer.cancel();
+    }
+    _typingClearTimers.clear();
+    await _tokenStorage.clearSession();
+    _state = AimState.initial().copyWith(
+      notice: message,
+      noticeSerial: _state.noticeSerial + 1,
+    );
+    notifyListeners();
   }
 }
 

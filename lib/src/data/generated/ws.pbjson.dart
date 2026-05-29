@@ -158,14 +158,12 @@ const SenderInfo$json = {
   '2': [
     {'1': 'name', '3': 1, '4': 1, '5': 9, '10': 'name'},
     {'1': 'email', '3': 2, '4': 1, '5': 9, '10': 'email'},
-    {'1': 'display_name', '3': 3, '4': 1, '5': 9, '10': 'displayName'},
   ],
 };
 
 /// Descriptor for `SenderInfo`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List senderInfoDescriptor = $convert.base64Decode(
-    'CgpTZW5kZXJJbmZvEhIKBG5hbWUYASABKAlSBG5hbWUSFAoFZW1haWwYAiABKAlSBWVtYWlsEi'
-    'EKDGRpc3BsYXlfbmFtZRgDIAEoCVILZGlzcGxheU5hbWU=');
+    'CgpTZW5kZXJJbmZvEhIKBG5hbWUYASABKAlSBG5hbWUSFAoFZW1haWwYAiABKAlSBWVtYWls');
 
 @$core.Deprecated('Use pushMessagePayloadDescriptor instead')
 const PushMessagePayload$json = {

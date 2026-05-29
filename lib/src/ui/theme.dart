@@ -104,6 +104,44 @@ class AimTheme {
           ),
         ),
       ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: AimColors.rail,
+        indicatorColor: AimColors.accentStrong.withValues(alpha: 0.25),
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return const TextStyle(
+              color: AimColors.accent,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            );
+          }
+          return const TextStyle(
+            color: AimColors.muted,
+            fontSize: 11,
+          );
+        }),
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return const IconThemeData(color: AimColors.accent);
+          }
+          return const IconThemeData(color: AimColors.muted);
+        }),
+      ),
+      navigationRailTheme: NavigationRailThemeData(
+        backgroundColor: AimColors.rail,
+        indicatorColor: AimColors.accentStrong.withValues(alpha: 0.25),
+        selectedIconTheme: const IconThemeData(color: AimColors.accent),
+        unselectedIconTheme: const IconThemeData(color: AimColors.muted),
+        selectedLabelTextStyle: const TextStyle(
+          color: AimColors.accent,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+        unselectedLabelTextStyle: const TextStyle(
+          color: AimColors.muted,
+          fontSize: 11,
+        ),
+      ),
     );
   }
 }

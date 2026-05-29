@@ -21,9 +21,12 @@
 
 ## 开发手册
 
-`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/docs/client_implement_instruction.md`
+- 客户端实现指南：`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/docs/client_implement_instruction.md`
+- REST OpenAPI：`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/docs/api/gateway-openapi.yaml`
+- WebSocket 协议：`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/docs/ws.md`
+- WS Proto：`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/shared/proto/ws/ws.proto`
 
-客户端实现以该手册及其引用的 REST OpenAPI、WS 协议和 Proto 文件为准；应用内不再包含演示账号或内置 mock 数据。
+客户端实现以上述手册及其引用的 REST OpenAPI、WS 协议和 Proto 文件为准；应用内不再包含演示账号或内置 mock 数据。
 
 ## 本地缓存
 

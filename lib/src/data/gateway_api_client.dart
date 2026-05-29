@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -7,12 +8,24 @@ import '../domain/models.dart';
 
 /// Dio interceptor that auto-injects Authorization header and
 /// retries on 401 by calling [onTokenExpired] to refresh.
+///
+/// Uses a lock to prevent concurrent refresh requests: when multiple
+/// requests fail with 401 at the same time, only the first one triggers
+/// a token refresh; the rest wait for that refresh to complete and
+/// then retry with the new token.
 class AuthInterceptor extends Interceptor {
   AuthInterceptor({this.onTokenExpired, String? initialToken})
     : _accessToken = initialToken;
 
   final Future<String?> Function()? onTokenExpired;
   String? _accessToken;
+
+  /// Whether a token refresh is currently in progress.
+  bool _isRefreshing = false;
+
+  /// Completer that resolves when the in-flight refresh finishes.
+  /// Waiting requests await this future to get the new token.
+  Completer<String?>? _refreshCompleter;
 
   /// Update the access token to use for future requests.
   void updateToken(String? token) => _accessToken = token;
@@ -31,19 +44,57 @@ class AuthInterceptor extends Interceptor {
     DioException err,
     ErrorInterceptorHandler handler,
   ) async {
+    // Never try to refresh when the refresh endpoint itself fails —
+    // the refresh token is invalid and refreshing again won't help.
+    // This also prevents a deadlock: if the refresh call triggered a
+    // 401 and we tried to refresh inside the in-progress refresh lock,
+    // the waiting path would await the same Completer indefinitely.
+    if (err.requestOptions.path.contains('/auth/refresh')) {
+      return handler.next(err);
+    }
+
     if (err.response?.statusCode == 401 || _isAuthError(err.response?.data)) {
       if (onTokenExpired != null) {
+        // Another refresh is already in progress — wait for its result.
+        if (_isRefreshing) {
+          try {
+            final newToken = await _refreshCompleter?.future;
+            if (newToken != null && newToken.isNotEmpty) {
+              final opts = err.requestOptions;
+              opts.headers['Authorization'] = 'Bearer $newToken';
+              final response = await Dio().fetch<void>(opts);
+              return handler.resolve(response);
+            }
+          } catch (_) {
+            // Refresh failed — let original error propagate.
+          }
+          return handler.next(err);
+        }
+
+        // First 401 — acquire the lock and start refreshing.
+        _isRefreshing = true;
+        _refreshCompleter = Completer<String?>();
         try {
           final newToken = await onTokenExpired!();
           if (newToken != null && newToken.isNotEmpty) {
             _accessToken = newToken;
+            _refreshCompleter!.complete(newToken);
             final opts = err.requestOptions;
             opts.headers['Authorization'] = 'Bearer $newToken';
             final response = await Dio().fetch<void>(opts);
             return handler.resolve(response);
           }
+          // Refresh returned null/empty — e.g. session not available.
+          // Resolve with null so waiters know no new token is available.
+          _refreshCompleter!.complete(null);
         } catch (_) {
-          // Refresh failed, let original error propagate
+          // Refresh failed — unblock waiters and let the original 401 propagate.
+          if (!(_refreshCompleter?.isCompleted ?? true)) {
+            _refreshCompleter!.complete(null);
+          }
+        } finally {
+          _isRefreshing = false;
+          _refreshCompleter = null;
         }
       }
     }
@@ -329,7 +380,7 @@ class GatewayApiClient {
         email: _asString(item['email']),
         nickname: _asString(
           item['display_name'],
-          fallback: _asString(item['email']),
+          fallback: _asString(item['name'], fallback: _asString(item['email'])),
         ),
         avatarUrl: _asString(item['avatar']),
         status: PresenceStatus.offline,
@@ -407,7 +458,10 @@ class GatewayApiClient {
         userId: _asInt(item['user_id']),
         status: _asString(item['status'], fallback: 'offline'),
         updatedAt: _dateFromMs(item['updated_at']),
-        displayName: _asString(item['display_name']),
+        displayName: _asString(
+          item['display_name'],
+          fallback: _asString(item['name']),
+        ),
       );
     }).toList();
   }
@@ -608,6 +662,22 @@ class GatewayApiClient {
 
   Future<Uint8List> downloadAttachmentBytes(String attachmentId) async {
     final ticket = await createAttachmentDownloadTicket(attachmentId);
+    return _downloadFromTicket(ticket);
+  }
+
+  /// 下载附件缩略图（manual §11.4）。
+  /// 使用 [thumbnailFileId] 作为 object_key 获取临时下载 URL 并下载。
+  Future<Uint8List?> downloadThumbnailBytes(String thumbnailFileId) async {
+    if (thumbnailFileId.isEmpty) return null;
+    try {
+      final ticket = await createAttachmentDownloadTicket(thumbnailFileId);
+      return _downloadFromTicket(ticket);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Uint8List> _downloadFromTicket(AttachmentDownloadTicket ticket) async {
     final response = await Dio().getUri<dynamic>(
       Uri.parse(ticket.url),
       options: Options(
@@ -713,7 +783,10 @@ UserProfile _userFromJson(
     email: _asString(json['email']),
     nickname: _asString(
       json['display_name'],
-      fallback: _asString(json['nickname'], fallback: _asString(json['email'])),
+      fallback: _asString(
+        json['nickname'],
+        fallback: _asString(json['name'], fallback: _asString(json['email'])),
+      ),
     ),
     avatarUrl: _asString(json['avatar']),
     status: presence,
@@ -726,7 +799,10 @@ UserProfile _userListItemFromJson(Map<String, dynamic> json) {
     email: _asString(json['email']),
     nickname: _asString(
       json['display_name'],
-      fallback: _asString(json['nickname'], fallback: _asString(json['email'])),
+      fallback: _asString(
+        json['nickname'],
+        fallback: _asString(json['name'], fallback: _asString(json['email'])),
+      ),
     ),
     avatarUrl: _asString(json['avatar']),
     status: PresenceStatus.offline,
@@ -752,7 +828,7 @@ Friendship _friendshipFromJson(
       email: email,
       nickname: _asString(
         json['display_name'],
-        fallback: email.split('@').first,
+        fallback: _asString(json['name'], fallback: email.split('@').first),
       ),
       avatarUrl: _asString(json['avatar']),
       status: PresenceStatus.offline,
@@ -801,7 +877,10 @@ ChatMessage _messageFromJson(Map<String, dynamic> json) {
     senderId: _asInt(json['sender_id']),
     senderName: _asString(
       sender['display_name'],
-      fallback: _asString(sender['name'], fallback: '系统'),
+      fallback: _asString(
+        sender['name'],
+        fallback: _asString(sender['email'], fallback: '系统'),
+      ),
     ),
     type: _messageType(_asString(json['message_type'])),
     content: _asString(json['content']),
@@ -821,6 +900,15 @@ AttachmentItem _attachmentFromJson(Map<String, dynamic> json) {
   final id = _asString(json['file_id'], fallback: _asString(json['id']));
   final size = _asInt(json['size']);
   final kind = _asString(json['kind'], fallback: 'file');
+  final rawThumbnailFileId = _asString(
+    json['thumbnail_file_id'],
+    fallback: _asString(json['thumbnail_object_key']),
+  );
+  final rawThumbnailUrl = _asString(json['thumbnail_url']);
+  final thumbnailFileId = rawThumbnailFileId.isNotEmpty
+      ? rawThumbnailFileId
+      : (_looksLikeUrl(rawThumbnailUrl) ? '' : rawThumbnailUrl);
+  final thumbnailUrl = _looksLikeUrl(rawThumbnailUrl) ? rawThumbnailUrl : '';
   return AttachmentItem(
     id: id,
     conversationId: _asInt(json['conversation_id']),
@@ -831,7 +919,8 @@ AttachmentItem _attachmentFromJson(Map<String, dynamic> json) {
     mime: _asString(json['mime'], fallback: _defaultMimeForKind(kind)),
     sizeBytes: size,
     parseStatus: _asString(json['parse_status']),
-    thumbnailUrl: _asString(json['thumbnail_url']),
+    thumbnailFileId: thumbnailFileId,
+    thumbnailUrl: thumbnailUrl,
     width: _nullableInt(json['width']),
     height: _nullableInt(json['height']),
     durationMs: _nullableInt(json['duration_ms']),
@@ -867,7 +956,10 @@ ReadStateItem _readStateFromJson(Map<String, dynamic> json) {
     updatedAt: _dateFromMs(json['updated_at']),
     email: json['email'] as String?,
     avatar: json['avatar'] as String?,
-    displayName: json['display_name'] as String?,
+    displayName: _asString(
+      json['display_name'],
+      fallback: _asString(json['name']),
+    ),
   );
 }
 
@@ -898,6 +990,13 @@ String _asString(dynamic value, {String fallback = ''}) {
   if (value == null) return fallback;
   final string = '$value';
   return string.isEmpty ? fallback : string;
+}
+
+bool _looksLikeUrl(String value) {
+  final lower = value.toLowerCase();
+  return lower.startsWith('http://') ||
+      lower.startsWith('https://') ||
+      lower.startsWith('data:');
 }
 
 int? _nullableInt(dynamic value) {

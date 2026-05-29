@@ -249,6 +249,7 @@ class AttachmentItem {
     this.sizeBytes = 0,
     this.parseStatus = '',
     this.downloadUrl = '',
+    this.thumbnailFileId = '',
     this.thumbnailUrl = '',
     this.localPreviewDataUri = '',
     this.width,
@@ -267,6 +268,11 @@ class AttachmentItem {
   final int sizeBytes;
   final String parseStatus;
   final String downloadUrl;
+
+  /// 缩略图 object_key / file_id，用于通过附件下载接口换取临时 URL。
+  final String thumbnailFileId;
+
+  /// 缩略图临时下载 URL（有有效期，可为空）。
   final String thumbnailUrl;
   final String localPreviewDataUri;
   final int? width;
@@ -296,6 +302,7 @@ class AttachmentItem {
     int? sizeBytes,
     String? parseStatus,
     String? downloadUrl,
+    String? thumbnailFileId,
     String? thumbnailUrl,
     String? localPreviewDataUri,
     int? width,
@@ -314,6 +321,7 @@ class AttachmentItem {
       sizeBytes: sizeBytes ?? this.sizeBytes,
       parseStatus: parseStatus ?? this.parseStatus,
       downloadUrl: downloadUrl ?? this.downloadUrl,
+      thumbnailFileId: thumbnailFileId ?? this.thumbnailFileId,
       thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
       localPreviewDataUri: localPreviewDataUri ?? this.localPreviewDataUri,
       width: width ?? this.width,
@@ -338,6 +346,7 @@ class AttachmentItem {
       status: status ?? this.status,
       parseStatus: parseStatus,
       downloadUrl: downloadUrl,
+      thumbnailFileId: thumbnailFileId,
       thumbnailUrl: thumbnailUrl,
       localPreviewDataUri: localPreviewDataUri ?? this.localPreviewDataUri,
       width: width,
@@ -367,11 +376,13 @@ class AttachmentMessagePayload {
     this.schema = 'aim.attachment.v1',
     this.parseStatus = '',
     this.downloadUrl = '',
+    this.thumbnailFileId = '',
     this.thumbnailUrl = '',
     this.localPreviewDataUri = '',
     this.width,
     this.height,
     this.durationMs,
+    this.metadata = const {},
   });
 
   final String schema;
@@ -385,11 +396,19 @@ class AttachmentMessagePayload {
   final String status;
   final String parseStatus;
   final String downloadUrl;
+
+  /// 缩略图的 file_id，用于通过 GET /api/attachments/:id/download 下载缩略图。
+  final String thumbnailFileId;
+
+  /// 从附件下载接口获取的缩略图临时下载 URL（有有效期）。
   final String thumbnailUrl;
   final String localPreviewDataUri;
   final int? width;
   final int? height;
   final int? durationMs;
+
+  /// 附件附加元数据（如 {"format": "png"}）。
+  final Map<String, dynamic> metadata;
 
   bool get isImage => kind == 'image' || mime.startsWith('image/');
   bool get isAudio => kind == 'audio' || mime.startsWith('audio/');
@@ -424,6 +443,17 @@ class AttachmentMessagePayload {
       original['mime'],
       fallback: _jsonString(json['mime'], fallback: 'application/octet-stream'),
     );
+    // §11.2/§11.4: thumbnail_file_id 是服务端推送的缩略图 object key，
+    // 需要单独调用 GET /api/attachments/:id/download 获取临时下载 URL。
+    final rawThumbnailFileId = _jsonString(
+      json['thumbnail_file_id'],
+      fallback: _jsonString(json['thumbnail_object_key']),
+    );
+    final rawThumbnailUrl = _jsonString(json['thumbnail_url']);
+    final thumbnailFileId = rawThumbnailFileId.isNotEmpty
+        ? rawThumbnailFileId
+        : (_looksLikeUrl(rawThumbnailUrl) ? '' : rawThumbnailUrl);
+    final thumbnailUrl = _looksLikeUrl(rawThumbnailUrl) ? rawThumbnailUrl : '';
     return AttachmentMessagePayload(
       schema: _jsonString(json['schema'], fallback: 'aim.attachment.v1'),
       fileId: _jsonString(json['file_id'], fallback: _jsonString(json['id'])),
@@ -442,11 +472,13 @@ class AttachmentMessagePayload {
         json['download_url'],
         fallback: _jsonString(json['url']),
       ),
-      thumbnailUrl: _jsonString(json['thumbnail_url']),
+      thumbnailFileId: thumbnailFileId,
+      thumbnailUrl: thumbnailUrl,
       localPreviewDataUri: _jsonString(json['local_preview_data_uri']),
       width: _nullableJsonInt(json['width']),
       height: _nullableJsonInt(json['height']),
       durationMs: _nullableJsonInt(json['duration_ms']),
+      metadata: _jsonMap(json['metadata']),
     );
   }
 
@@ -470,8 +502,10 @@ class AttachmentMessagePayload {
     String? status,
     String? parseStatus,
     String? downloadUrl,
+    String? thumbnailFileId,
     String? thumbnailUrl,
     String? localPreviewDataUri,
+    Map<String, dynamic>? metadata,
   }) {
     return AttachmentMessagePayload(
       schema: schema,
@@ -485,14 +519,18 @@ class AttachmentMessagePayload {
       status: status ?? this.status,
       parseStatus: parseStatus ?? this.parseStatus,
       downloadUrl: downloadUrl ?? this.downloadUrl,
+      thumbnailFileId: thumbnailFileId ?? this.thumbnailFileId,
       thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
       localPreviewDataUri: localPreviewDataUri ?? this.localPreviewDataUri,
       width: width,
       height: height,
       durationMs: durationMs,
+      metadata: metadata ?? this.metadata,
     );
   }
 
+  /// 序列化为符合 aim.attachment.v1 schema 的 JSON 对象。
+  /// [includeLocalPreview] 控制是否写入本地预览 data URI（发送到服务端时排除）。
   Map<String, dynamic> toJson({bool includeLocalPreview = true}) {
     final effectiveParseStatus = parseStatus.trim().isEmpty
         ? 'pending'
@@ -507,6 +545,7 @@ class AttachmentMessagePayload {
         'size': sizeBytes,
       },
       'parse_status': effectiveParseStatus,
+      if (thumbnailFileId.isNotEmpty) 'thumbnail_file_id': thumbnailFileId,
       if (durationMs != null) 'duration_ms': durationMs,
       if (width != null) 'width': width,
       if (height != null) 'height': height,
@@ -514,7 +553,7 @@ class AttachmentMessagePayload {
       if (status.isNotEmpty) 'status': status,
       if (sizeLabel.isNotEmpty) 'size_label': sizeLabel,
       if (downloadUrl.isNotEmpty) 'download_url': downloadUrl,
-      if (thumbnailUrl.isNotEmpty) 'thumbnail_url': thumbnailUrl,
+      if (metadata.isNotEmpty) 'metadata': metadata,
       if (includeLocalPreview && localPreviewDataUri.isNotEmpty)
         'local_preview_data_uri': localPreviewDataUri,
     };
@@ -709,6 +748,13 @@ String _jsonString(dynamic value, {String fallback = ''}) {
   if (value == null) return fallback;
   final string = '$value';
   return string.isEmpty ? fallback : string;
+}
+
+bool _looksLikeUrl(String value) {
+  final lower = value.toLowerCase();
+  return lower.startsWith('http://') ||
+      lower.startsWith('https://') ||
+      lower.startsWith('data:');
 }
 
 int _jsonInt(dynamic value, {int fallback = 0}) {

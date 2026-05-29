@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show OrderingMode, OrderingTerm, Value;
+import 'package:flutter/foundation.dart';
 
 import 'aim_repository.dart';
 import 'database.dart';
@@ -31,16 +31,27 @@ class GatewayAimRepository implements AimRepository {
 
   Future<String?> _refreshAccessToken() async {
     final current = _session;
-    if (current == null) return null;
-    final refreshed = await _apiClient.refresh(current.refreshToken);
-    final next = AuthSession(
-      user: current.user,
-      accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
-      expiresAt: refreshed.expiresAt,
-    );
-    _session = next;
-    return next.accessToken;
+    if (current == null) {
+      debugPrint('[AuthInterceptor] _refreshAccessToken: _session is null, '
+          'skipping refresh');
+      return null;
+    }
+    debugPrint('[AuthInterceptor] _refreshAccessToken: refreshing token...');
+    try {
+      final refreshed = await _apiClient.refresh(current.refreshToken);
+      final next = AuthSession(
+        user: current.user,
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        expiresAt: refreshed.expiresAt,
+      );
+      _session = next;
+      debugPrint('[AuthInterceptor] _refreshAccessToken: refresh succeeded');
+      return next.accessToken;
+    } catch (e) {
+      debugPrint('[AuthInterceptor] _refreshAccessToken: refresh failed: $e');
+      rethrow;
+    }
   }
 
   /// Trigger reconnection with exponential backoff, then sync presence and
@@ -302,6 +313,8 @@ class GatewayAimRepository implements AimRepository {
         for (final msg in entry.value) {
           if (msg.id <= 0) continue;
           await _upsertMessage(msg);
+          // 对附件消息也持久化到 local_attachments 表
+          _maybeUpsertAttachment(msg);
         }
       }
     } catch (_) {
@@ -309,6 +322,7 @@ class GatewayAimRepository implements AimRepository {
     }
   }
 
+  /// Upsert a single message into the local DB (dedup by message_id).
   /// Upsert a single message into the local DB (dedup by message_id).
   Future<void> _upsertMessage(ChatMessage msg) async {
     final db = _db;
@@ -339,6 +353,41 @@ class GatewayAimRepository implements AimRepository {
               createdLocally: const Value(false),
             ),
           );
+    } catch (_) {
+      // Best-effort
+    }
+  }
+
+  /// 如果消息是附件消息，尝试提取附件元信息写入 local_attachments 表。
+  void _maybeUpsertAttachment(ChatMessage msg) {
+    final db = _db;
+    if (db == null) return;
+    final payload = AttachmentMessagePayload.tryParse(msg.content);
+    if (payload == null || payload.fileId.isEmpty) return;
+    try {
+      db.into(db.localAttachments).insertOnConflictUpdate(
+        LocalAttachmentsCompanion(
+          attachmentId: Value(payload.fileId),
+          conversationId: Value(payload.conversationId > 0
+              ? payload.conversationId
+              : msg.conversationId),
+          kind: Value(payload.kind),
+          name: Value(payload.name),
+          mime: Value(payload.mime),
+          sizeBytes: Value(payload.sizeBytes),
+          sizeLabel: Value(payload.sizeLabel),
+          status: Value(payload.status),
+          parseStatus: Value(payload.parseStatus),
+          downloadUrl: Value(payload.downloadUrl),
+          thumbnailUrl: Value(payload.thumbnailFileId.isNotEmpty
+              ? payload.thumbnailFileId
+              : payload.thumbnailUrl),
+          width: Value(payload.width),
+          height: Value(payload.height),
+          durationMs: Value(payload.durationMs),
+          createdAt: Value(msg.createdAt),
+        ),
+      );
     } catch (_) {
       // Best-effort
     }
@@ -735,5 +784,25 @@ class GatewayAimRepository implements AimRepository {
       bytes: bytes,
       sourceUrl: url,
     );
+  }
+
+  /// 下载附件缩略图（manual §11.4）。
+  /// 使用 [payload.thumbnailFileId] 作为 object_key。
+  Future<AttachmentDownloadResult?> downloadThumbnail(
+    AttachmentMessagePayload payload,
+  ) async {
+    final fileId = payload.thumbnailFileId;
+    if (fileId.isEmpty) return null;
+    try {
+      final bytes = await _apiClient.downloadThumbnailBytes(fileId);
+      if (bytes == null) return null;
+      return AttachmentDownloadResult(
+        fileName: 'thumbnail_${payload.name}',
+        mime: 'image/png',
+        bytes: bytes,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }

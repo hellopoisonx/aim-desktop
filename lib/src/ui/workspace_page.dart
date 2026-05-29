@@ -8,6 +8,7 @@ import 'package:file_selector/file_selector.dart';
 import '../aim_controller.dart';
 import '../data/aim_repository.dart';
 import '../domain/models.dart';
+import 'responsive.dart';
 import 'theme.dart';
 import 'widgets/shared_widgets.dart';
 
@@ -33,6 +34,158 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
 
     final controller = ref.watch(aimControllerProvider);
     final state = controller.state;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        if (Breakpoints.isMobile(width)) {
+          return _MobileLayout(controller: controller, state: state);
+        }
+        if (Breakpoints.isTablet(width)) {
+          return _TabletLayout(
+            controller: controller,
+            state: state,
+            width: width,
+          );
+        }
+        return _DesktopLayout(controller: controller, state: state);
+      },
+    );
+  }
+}
+
+// ── 移动端布局 ──
+class _MobileLayout extends StatelessWidget {
+  const _MobileLayout({required this.controller, required this.state});
+
+  final AimController controller;
+  final AimState state;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      drawer: _AppDrawer(controller: controller, state: state),
+      body: SafeArea(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: _buildBody(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    final showConversationList =
+        state.currentSection == AppSection.chats &&
+        state.selectedConversationId == null;
+
+    if (showConversationList || state.currentSection == AppSection.chats) {
+      if (state.selectedConversationId == null) {
+        return _ConversationSidebar(controller: controller, state: state);
+      }
+      final conversation = state.selectedConversation;
+      if (conversation == null) {
+        return const _ChatEmptyState();
+      }
+      return _ChatPane(
+        controller: controller,
+        state: state,
+        conversation: conversation,
+        compact: true,
+      );
+    }
+    return _SectionContent(controller: controller, state: state, compact: true);
+  }
+}
+
+// ── 平板端布局 ──
+class _TabletLayout extends StatelessWidget {
+  const _TabletLayout({
+    required this.controller,
+    required this.state,
+    required this.width,
+  });
+
+  final AimController controller;
+  final AimState state;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Row(
+        children: [
+          NavigationRail(
+            selectedIndex: _navIndex(state.currentSection),
+            onDestinationSelected: (index) {
+              controller.selectSection(_sectionFromIndex(index));
+            },
+            labelType: NavigationRailLabelType.all,
+            destinations: const [
+              NavigationRailDestination(
+                icon: Icon(Icons.chat_rounded),
+                label: Text('会话'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.people_alt_rounded),
+                label: Text('好友'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.groups_rounded),
+                label: Text('群组'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.person_rounded),
+                label: Text('我的'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.settings_rounded),
+                label: Text('设置'),
+              ),
+            ],
+          ),
+          SizedBox(
+            width: sidebarWidth(width),
+            child: _ConversationSidebar(controller: controller, state: state),
+          ),
+          const VerticalDivider(width: 1),
+          Expanded(
+            child: _MainContent(controller: controller, state: state),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static int _navIndex(AppSection section) {
+    return switch (section) {
+      AppSection.chats => 0,
+      AppSection.friends || AppSection.friendRequests => 1,
+      AppSection.groups => 2,
+      AppSection.profile => 3,
+      _ => 4,
+    };
+  }
+
+  static AppSection _sectionFromIndex(int index) {
+    return switch (index) {
+      1 => AppSection.friends,
+      2 => AppSection.groups,
+      3 => AppSection.profile,
+      4 => AppSection.settings,
+      _ => AppSection.chats,
+    };
+  }
+}
+
+// ── 桌面端布局（原有布局保留） ──
+class _DesktopLayout extends StatelessWidget {
+  const _DesktopLayout({required this.controller, required this.state});
+
+  final AimController controller;
+  final AimState state;
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       drawer: _AppDrawer(controller: controller, state: state),
       body: LayoutBuilder(
@@ -437,8 +590,9 @@ class _ChatPaneState extends State<_ChatPane> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _restoreOrScrollToBottom();
         _initialScrollDone = true;
-        _lastMessageCount =
-            widget.state.messagesFor(widget.conversation.id).length;
+        _lastMessageCount = widget.state
+            .messagesFor(widget.conversation.id)
+            .length;
       });
       return;
     }
@@ -511,8 +665,7 @@ class _ChatPaneState extends State<_ChatPane> {
   void _afterFirstBuild() {
     _restoreOrScrollToBottom();
     _initialScrollDone = true;
-    _lastMessageCount =
-        widget.state.messagesFor(widget.conversation.id).length;
+    _lastMessageCount = widget.state.messagesFor(widget.conversation.id).length;
   }
 
   void _scrollToTop() {
@@ -651,6 +804,7 @@ class _ScrollFAB extends StatelessWidget {
     );
   }
 }
+
 class _ChatHeader extends StatelessWidget {
   const _ChatHeader({
     required this.controller,
@@ -733,14 +887,11 @@ class _ChatHeader extends StatelessWidget {
             tooltip: '更多操作',
             onSelected: (value) {
               switch (value) {
-                case 'token':
-                  controller.refreshToken();
                 case 'leave':
                   controller.leaveConversation(conversation.id);
               }
             },
             itemBuilder: (context) => const [
-              PopupMenuItem(value: 'token', child: Text('刷新连接')),
               PopupMenuItem(value: 'leave', child: Text('退出/解散会话')),
             ],
             icon: const Icon(Icons.more_vert_rounded),
@@ -814,94 +965,101 @@ class _MessageBubble extends StatelessWidget {
       );
     }
 
-    final bubbleColor = isMine ? AimColors.bubbleMine : AimColors.bubble;
-    return Align(
-      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 560),
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        child: Row(
-          mainAxisAlignment: isMine
-              ? MainAxisAlignment.end
-              : MainAxisAlignment.start,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (!isMine) ...[
-              AvatarCircle(label: _initials(message.senderName), size: 36),
-              const SizedBox(width: 10),
-            ],
-            Flexible(
-              child: Column(
-                crossAxisAlignment: isMine
-                    ? CrossAxisAlignment.end
-                    : CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final bubbleColor = isMine ? AimColors.bubbleMine : AimColors.bubble;
+        return Align(
+          alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+          child: Container(
+            constraints: BoxConstraints(
+              maxWidth: messageBubbleMaxWidth(constraints.maxWidth),
+            ),
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              mainAxisAlignment: isMine
+                  ? MainAxisAlignment.end
+                  : MainAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (!isMine) ...[
+                  AvatarCircle(label: _initials(message.senderName), size: 36),
+                  const SizedBox(width: 10),
+                ],
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: isMine
+                        ? CrossAxisAlignment.end
+                        : CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        message.senderName,
-                        style: const TextStyle(
-                          color: AimColors.muted,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            message.senderName,
+                            style: const TextStyle(
+                              color: AimColors.muted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          if (!isMine) ...[
+                            const SizedBox(width: 6),
+                            const StatusPill(
+                              label: '管理员',
+                              color: AimColors.success,
+                            ),
+                          ],
+                          const SizedBox(width: 8),
+                          Text(
+                            formatClock(message.createdAt),
+                            style: const TextStyle(
+                              color: AimColors.muted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      GestureDetector(
+                        onLongPress: () =>
+                            _showMessageActions(context, message),
+                        onSecondaryTapDown: (_) =>
+                            _showMessageActions(context, message),
+                        child: Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: bubbleColor,
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(18),
+                              topRight: const Radius.circular(18),
+                              bottomLeft: Radius.circular(isMine ? 18 : 5),
+                              bottomRight: Radius.circular(isMine ? 5 : 18),
+                            ),
+                          ),
+                          child: _MessageContent(
+                            controller: controller,
+                            message: message,
+                          ),
                         ),
                       ),
-                      if (!isMine) ...[
-                        const SizedBox(width: 6),
-                        const StatusPill(
-                          label: '管理员',
-                          color: AimColors.success,
-                        ),
-                      ],
-                      const SizedBox(width: 8),
-                      Text(
-                        formatClock(message.createdAt),
-                        style: const TextStyle(
-                          color: AimColors.muted,
-                          fontSize: 12,
-                        ),
-                      ),
+                      const SizedBox(height: 5),
+                      _MessageStatus(message: message, onRetry: onRetry),
                     ],
                   ),
-                  const SizedBox(height: 6),
-                  GestureDetector(
-                    onLongPress: () => _showMessageActions(context, message),
-                    onSecondaryTapDown: (_) =>
-                        _showMessageActions(context, message),
-                    child: Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: bubbleColor,
-                        borderRadius: BorderRadius.only(
-                          topLeft: const Radius.circular(18),
-                          topRight: const Radius.circular(18),
-                          bottomLeft: Radius.circular(isMine ? 18 : 5),
-                          bottomRight: Radius.circular(isMine ? 5 : 18),
-                        ),
-                      ),
-                      child: _MessageContent(
-                        controller: controller,
-                        message: message,
-                      ),
-                    ),
+                ),
+                if (isMine) ...[
+                  const SizedBox(width: 10),
+                  AvatarCircle(
+                    label: _initials(message.senderName),
+                    size: 36,
+                    background: AimColors.accentStrong,
                   ),
-                  const SizedBox(height: 5),
-                  _MessageStatus(message: message, onRetry: onRetry),
                 ],
-              ),
+              ],
             ),
-            if (isMine) ...[
-              const SizedBox(width: 10),
-              AvatarCircle(
-                label: _initials(message.senderName),
-                size: 36,
-                background: AimColors.accentStrong,
-              ),
-            ],
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }
@@ -1113,6 +1271,7 @@ AttachmentMessagePayload _payloadWithLocalAttachmentState(
       status: attachment.status,
       parseStatus: attachment.parseStatus,
       downloadUrl: attachment.downloadUrl,
+      thumbnailFileId: attachment.thumbnailFileId,
       thumbnailUrl: attachment.thumbnailUrl,
       localPreviewDataUri: attachment.localPreviewDataUri,
     );
@@ -1489,67 +1648,105 @@ class _Composer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
-      decoration: const BoxDecoration(
-        color: AimColors.panel,
-        border: Border(top: BorderSide(color: AimColors.divider)),
-      ),
-      child: Row(
-        children: [
-          IconButton(
-            tooltip: '选择文件并上传',
-            onPressed: () => _pickAndSend(context, 'file'),
-            icon: const Icon(Icons.attach_file_rounded),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 480;
+        return Container(
+          padding: compact
+              ? const EdgeInsets.fromLTRB(10, 8, 10, 10)
+              : const EdgeInsets.fromLTRB(18, 12, 18, 18),
+          decoration: const BoxDecoration(
+            color: AimColors.panel,
+            border: Border(top: BorderSide(color: AimColors.divider)),
           ),
-          IconButton(
-            tooltip: '选择图片并上传',
-            onPressed: () => _pickAndSend(context, 'image'),
-            icon: const Icon(Icons.image_rounded),
-          ),
-          IconButton(
-            tooltip: '选择音频并上传',
-            onPressed: () => _pickAndSend(context, 'audio'),
-            icon: const Icon(Icons.mic_rounded),
-          ),
-          IconButton(
-            tooltip: '选择视频并上传',
-            onPressed: () => _pickAndSend(context, 'video'),
-            icon: const Icon(Icons.videocam_rounded),
-          ),
-          Expanded(
-            child: TextField(
-              key: const Key('message_input'),
-              controller: textController,
-              minLines: 1,
-              maxLines: 5,
-              onChanged: (_) => controller.sendTypingEvent(),
-              onSubmitted: (_) => _send(),
-              decoration: const InputDecoration(
-                hintText: '输入消息...',
-                prefixIcon: Icon(Icons.edit_rounded),
+          child: Row(
+            children: [
+              if (compact)
+                _CompactAttachMenu(
+                  onPick: (kind) {
+                    if (kind == 'emoji') {
+                      textController.text = '${textController.text} 😊';
+                      textController.selection = TextSelection.collapsed(
+                        offset: textController.text.length,
+                      );
+                    } else {
+                      _pickAndSend(context, kind);
+                    }
+                  },
+                )
+              else ...[
+                IconButton(
+                  tooltip: '选择文件并上传',
+                  onPressed: () => _pickAndSend(context, 'file'),
+                  icon: const Icon(Icons.attach_file_rounded),
+                ),
+                IconButton(
+                  tooltip: '选择图片并上传',
+                  onPressed: () => _pickAndSend(context, 'image'),
+                  icon: const Icon(Icons.image_rounded),
+                ),
+                IconButton(
+                  tooltip: '选择音频并上传',
+                  onPressed: () => _pickAndSend(context, 'audio'),
+                  icon: const Icon(Icons.mic_rounded),
+                ),
+                IconButton(
+                  tooltip: '选择视频并上传',
+                  onPressed: () => _pickAndSend(context, 'video'),
+                  icon: const Icon(Icons.videocam_rounded),
+                ),
+              ],
+              Expanded(
+                child: TextField(
+                  key: const Key('message_input'),
+                  controller: textController,
+                  minLines: 1,
+                  maxLines: 5,
+                  onChanged: (_) => controller.sendTypingEvent(),
+                  onSubmitted: (_) => _send(),
+                  decoration: InputDecoration(
+                    hintText: '输入消息...',
+                    prefixIcon: compact ? null : const Icon(Icons.edit_rounded),
+                    isDense: compact,
+                    contentPadding: compact
+                        ? const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          )
+                        : null,
+                  ),
+                ),
               ),
-            ),
+              if (!compact) ...[
+                const SizedBox(width: 10),
+                IconButton(
+                  tooltip: '表情',
+                  onPressed: () {
+                    textController.text = '${textController.text} 😊';
+                    textController.selection = TextSelection.collapsed(
+                      offset: textController.text.length,
+                    );
+                  },
+                  icon: const Icon(Icons.emoji_emotions_rounded),
+                ),
+              ],
+              SizedBox(width: compact ? 4 : 10),
+              compact
+                  ? IconButton.filled(
+                      key: const Key('send_message'),
+                      onPressed: _send,
+                      icon: const Icon(Icons.send_rounded),
+                    )
+                  : FilledButton.icon(
+                      key: const Key('send_message'),
+                      onPressed: _send,
+                      icon: const Icon(Icons.send_rounded),
+                      label: const Text('发送'),
+                    ),
+            ],
           ),
-          const SizedBox(width: 10),
-          IconButton(
-            tooltip: '表情',
-            onPressed: () {
-              textController.text = '${textController.text} 😊';
-              textController.selection = TextSelection.collapsed(
-                offset: textController.text.length,
-              );
-            },
-            icon: const Icon(Icons.emoji_emotions_rounded),
-          ),
-          FilledButton.icon(
-            key: const Key('send_message'),
-            onPressed: _send,
-            icon: const Icon(Icons.send_rounded),
-            label: const Text('发送'),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -1586,6 +1783,61 @@ class _Composer extends StatelessWidget {
       if (!context.mounted) return;
       _showNotice(context, '附件读取失败：$error');
     }
+  }
+}
+
+/// 移动端紧凑附件菜单：一个 + 按钮弹出选项。
+class _CompactAttachMenu extends StatelessWidget {
+  const _CompactAttachMenu({required this.onPick});
+
+  final ValueChanged<String> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      tooltip: '添加附件',
+      icon: const Icon(Icons.add_circle_outline_rounded),
+      onSelected: onPick,
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: 'image',
+          child: _MenuOption(icon: Icons.image_rounded, label: '图片'),
+        ),
+        PopupMenuItem(
+          value: 'file',
+          child: _MenuOption(
+            icon: Icons.insert_drive_file_rounded,
+            label: '文件',
+          ),
+        ),
+        PopupMenuItem(
+          value: 'audio',
+          child: _MenuOption(icon: Icons.mic_rounded, label: '音频'),
+        ),
+        PopupMenuItem(
+          value: 'video',
+          child: _MenuOption(icon: Icons.videocam_rounded, label: '视频'),
+        ),
+        PopupMenuItem(
+          value: 'emoji',
+          child: _MenuOption(icon: Icons.emoji_emotions_rounded, label: '表情'),
+        ),
+      ],
+    );
+  }
+}
+
+class _MenuOption extends StatelessWidget {
+  const _MenuOption({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [Icon(icon, size: 20), const SizedBox(width: 12), Text(label)],
+    );
   }
 }
 

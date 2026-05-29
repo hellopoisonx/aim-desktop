@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../aim_controller.dart';
 import '../domain/models.dart';
+import 'responsive.dart';
 import 'theme.dart';
 import 'widgets/shared_widgets.dart';
 
@@ -44,7 +45,9 @@ class _AuthPageState extends ConsumerState<AuthPage> {
     return Scaffold(
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final compact = constraints.maxWidth < 920;
+          final width = constraints.maxWidth;
+          final isDesktop = Breakpoints.isDesktop(width);
+          final isMobile = Breakpoints.isMobile(width);
           final form = _AuthForm(
             mode: _mode,
             isBusy: state.isBusy,
@@ -54,7 +57,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
             onModeChanged: (mode) => setState(() => _mode = mode),
             onSubmit: () => _submit(controller),
           );
-          final intro = const _AuthIntro();
+          final intro = _AuthIntro(compact: isMobile);
           return Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
@@ -71,21 +74,21 @@ class _AuthPageState extends ConsumerState<AuthPage> {
               child: Center(
                 child: SingleChildScrollView(
                   padding: EdgeInsets.symmetric(
-                    horizontal: compact ? 20 : 56,
-                    vertical: 32,
+                    horizontal: isMobile ? 16 : (isDesktop ? 56 : 32),
+                    vertical: isMobile ? 20 : 32,
                   ),
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 1120),
-                    child: compact
-                        ? Column(
-                            children: [intro, const SizedBox(height: 24), form],
-                          )
-                        : Row(
+                    child: isDesktop
+                        ? Row(
                             children: [
                               Expanded(child: intro),
                               const SizedBox(width: 48),
                               SizedBox(width: 430, child: form),
                             ],
+                          )
+                        : Column(
+                            children: [intro, const SizedBox(height: 24), form],
                           ),
                   ),
                 ),
@@ -114,7 +117,9 @@ class _AuthPageState extends ConsumerState<AuthPage> {
 }
 
 class _AuthIntro extends StatelessWidget {
-  const _AuthIntro();
+  const _AuthIntro({this.compact = false});
+
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -125,11 +130,11 @@ class _AuthIntro extends StatelessWidget {
         Row(
           children: [
             Container(
-              width: 56,
-              height: 56,
+              width: compact ? 48 : 56,
+              height: compact ? 48 : 56,
               decoration: BoxDecoration(
                 color: AimColors.accentStrong,
-                borderRadius: BorderRadius.circular(18),
+                borderRadius: BorderRadius.circular(compact ? 14 : 18),
                 boxShadow: [
                   BoxShadow(
                     color: AimColors.accentStrong.withValues(alpha: 0.32),
@@ -138,117 +143,28 @@ class _AuthIntro extends StatelessWidget {
                   ),
                 ],
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.forum_rounded,
                 color: Colors.white,
-                size: 30,
+                size: compact ? 24 : 30,
               ),
             ),
             const SizedBox(width: 14),
-            const Text(
-              'AIM Desktop',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
+            Text(
+              'AIM',
+              style: TextStyle(
+                fontSize: compact ? 24 : 28,
+                fontWeight: FontWeight.w900,
+              ),
             ),
           ],
         ),
-        const SizedBox(height: 38),
-        Text(
-          '更轻松地聊天、协作与管理联系人',
-          style: Theme.of(context).textTheme.displaySmall?.copyWith(
-            fontWeight: FontWeight.w900,
-            height: 1.08,
-          ),
-        ),
-        const SizedBox(height: 18),
-        const Text(
-          '清晰的桌面端聊天体验，支持会话搜索、好友申请、群聊管理、文件收发、通知、设置与反馈等常用流程。',
-          style: TextStyle(color: AimColors.muted, fontSize: 16, height: 1.7),
-        ),
-        const SizedBox(height: 30),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: const [
-            StatusPill(label: '快速登录', icon: Icons.login_rounded),
-            StatusPill(label: '实时消息', icon: Icons.sync_rounded),
-            StatusPill(label: '深色主题', icon: Icons.dark_mode_rounded),
-            StatusPill(label: '稳定同步', icon: Icons.hub_rounded),
-          ],
-        ),
-        const SizedBox(height: 34),
-        const _FlowPreview(),
+        SizedBox(height: compact ? 20 : 38),
       ],
     );
   }
 }
 
-class _FlowPreview extends StatelessWidget {
-  const _FlowPreview();
-
-  @override
-  Widget build(BuildContext context) {
-    final flows = [
-      (Icons.login_rounded, '登录 / 注册', '安全进入你的账号'),
-      (Icons.chat_bubble_rounded, '会话主页', '搜索、未读提醒与输入状态'),
-      (Icons.send_rounded, '消息收发', '文本、图片与文件发送'),
-      (Icons.groups_rounded, '好友与群', '申请、处理、建群、成员管理'),
-    ];
-    return AimPanel(
-      color: AimColors.panel.withValues(alpha: 0.72),
-      child: Column(
-        children: [
-          for (final (index, flow) in flows.indexed) ...[
-            _FlowRow(icon: flow.$1, title: flow.$2, subtitle: flow.$3),
-            if (index != flows.length - 1) const Divider(height: 24),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _FlowRow extends StatelessWidget {
-  const _FlowRow({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 42,
-          height: 42,
-          decoration: BoxDecoration(
-            color: AimColors.accent.withValues(alpha: 0.14),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Icon(icon, color: AimColors.accent),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
-              const SizedBox(height: 3),
-              Text(
-                subtitle,
-                style: const TextStyle(color: AimColors.muted, fontSize: 13),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
 
 class _AuthForm extends StatelessWidget {
   const _AuthForm({

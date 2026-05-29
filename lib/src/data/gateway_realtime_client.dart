@@ -389,9 +389,9 @@ class GatewayRealtimeClient {
             conversationType: push.conversationType,
             clientMessageId: push.clientMsgId,
             isSystem: push.isSystem,
-            senderDisplayName: push.senderInfo.displayName.isNotEmpty
-                ? push.senderInfo.displayName
-                : push.senderInfo.name,
+            senderDisplayName: push.senderInfo.name.isNotEmpty
+                ? push.senderInfo.name
+                : push.senderInfo.email,
             mentions: List<String>.from(push.mentions),
           ),
         );

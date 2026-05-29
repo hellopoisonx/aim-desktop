@@ -445,12 +445,10 @@ class SenderInfo extends $pb.GeneratedMessage {
   factory SenderInfo({
     $core.String? name,
     $core.String? email,
-    $core.String? displayName,
   }) {
     final result = create();
     if (name != null) result.name = name;
     if (email != null) result.email = email;
-    if (displayName != null) result.displayName = displayName;
     return result;
   }
 
@@ -469,7 +467,6 @@ class SenderInfo extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'name')
     ..aOS(2, _omitFieldNames ? '' : 'email')
-    ..aOS(3, _omitFieldNames ? '' : 'displayName')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -507,15 +504,6 @@ class SenderInfo extends $pb.GeneratedMessage {
   $core.bool hasEmail() => $_has(1);
   @$pb.TagNumber(2)
   void clearEmail() => $_clearField(2);
-
-  @$pb.TagNumber(3)
-  $core.String get displayName => $_getSZ(2);
-  @$pb.TagNumber(3)
-  set displayName($core.String value) => $_setString(2, value);
-  @$pb.TagNumber(3)
-  $core.bool hasDisplayName() => $_has(2);
-  @$pb.TagNumber(3)
-  void clearDisplayName() => $_clearField(3);
 }
 
 /// PushMessagePayload — 推送聊天消息

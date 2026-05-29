@@ -56,7 +56,7 @@ class _AimDesktopAppState extends ConsumerState<AimDesktopApp>
   Widget build(BuildContext context) {
     final state = ref.watch(aimControllerProvider).state;
     return MaterialApp(
-      title: 'AIM Desktop',
+      title: 'AIM',
       debugShowCheckedModeBanner: false,
       theme: AimTheme.dark(),
       home: AnimatedSwitcher(
