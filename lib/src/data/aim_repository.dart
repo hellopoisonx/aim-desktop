@@ -46,6 +46,7 @@ class AimBootstrapData {
     required this.messagesByConversation,
     required this.friends,
     required this.friendRequests,
+    this.friendTags = const [],
     required this.attachments,
     required this.orders,
   });
@@ -54,6 +55,7 @@ class AimBootstrapData {
   final Map<int, List<ChatMessage>> messagesByConversation;
   final List<Friendship> friends;
   final List<Friendship> friendRequests;
+  final List<FriendTag> friendTags;
   final List<AttachmentItem> attachments;
   final List<ServiceOrder> orders;
 }
@@ -122,6 +124,31 @@ abstract class AimRepository {
   });
 
   Future<List<UserProfile>> searchUsers(String keyword);
+
+  Future<List<FriendTag>> listFriendTags() async => const [];
+
+  Future<FriendTag> createFriendTag(String name) =>
+      throw UnsupportedError('当前仓库不支持好友标签');
+
+  Future<FriendTag> renameFriendTag(int tagId, String name) =>
+      throw UnsupportedError('当前仓库不支持好友标签');
+
+  Future<void> deleteFriendTag(int tagId) async {}
+
+  Future<Friendship> setFriendTags(int friendId, List<int> tagIds) =>
+      throw UnsupportedError('当前仓库不支持好友标签');
+
+  Future<Friendship> removeFriendTag(int friendId, int tagId) =>
+      throw UnsupportedError('当前仓库不支持好友标签');
+
+  Future<UnifiedSearchResult> search(
+    String query, {
+    List<String> scopes = const [],
+    int? conversationId,
+    int? cursorCreatedAt,
+    int? cursorId,
+    int limit = 20,
+  }) async => const UnifiedSearchResult();
 
   Future<Friendship> requestFriend(
     UserProfile currentUser,

@@ -104,4 +104,47 @@ void main() {
     expect(rows.length, 1);
     expect(rows.first.lastReadMessageId, 90005);
   });
+
+  test('local_read_states 以 conversation_id + user_id 作为复合主键', () async {
+    final now = DateTime.now();
+    await db
+        .into(db.localReadStates)
+        .insertOnConflictUpdate(
+          LocalReadStatesCompanion(
+            conversationId: const Value(501),
+            userId: const Value(2001),
+            lastReadMessageId: const Value(90005),
+            updatedAt: Value(now),
+          ),
+        );
+    await db
+        .into(db.localReadStates)
+        .insertOnConflictUpdate(
+          LocalReadStatesCompanion(
+            conversationId: const Value(501),
+            userId: const Value(2002),
+            lastReadMessageId: const Value(90003),
+            updatedAt: Value(now),
+          ),
+        );
+    await db
+        .into(db.localReadStates)
+        .insertOnConflictUpdate(
+          LocalReadStatesCompanion(
+            conversationId: const Value(501),
+            userId: const Value(2001),
+            lastReadMessageId: const Value(90006),
+            updatedAt: Value(now),
+          ),
+        );
+
+    final rows = await (db.select(
+      db.localReadStates,
+    )..where((tbl) => tbl.conversationId.equals(501))).get();
+    expect(rows.length, 2);
+    expect(
+      rows.firstWhere((row) => row.userId == 2001).lastReadMessageId,
+      90006,
+    );
+  });
 }

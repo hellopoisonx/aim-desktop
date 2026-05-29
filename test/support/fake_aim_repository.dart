@@ -56,6 +56,7 @@ class FakeAimRepository implements AimRepository {
   Map<int, List<ChatMessage>> _messages = const {};
   List<Friendship> _friends = const [];
   List<Friendship> _friendRequests = const [];
+  List<FriendTag> _friendTags = const [];
   final List<AttachmentItem> _attachments = [];
 
   @override
@@ -131,6 +132,7 @@ class FakeAimRepository implements AimRepository {
       },
       friends: [..._friends],
       friendRequests: [..._friendRequests],
+      friendTags: [..._friendTags],
       attachments: [..._attachments],
       orders: const [],
     );
@@ -177,7 +179,7 @@ class FakeAimRepository implements AimRepository {
       conversationId: conversationId,
       senderId: sender.id,
       senderName: sender.nickname,
-      type: payload.isImage ? MessageType.image : MessageType.file,
+      type: messageTypeFromAttachmentPayload(payload),
       content: displayContent,
       createdAt: createdAt,
       clientMessageId: clientMessageId,
@@ -213,6 +215,120 @@ class FakeAimRepository implements AimRepository {
         status: PresenceStatus.offline,
       ),
     ];
+  }
+
+  @override
+  Future<List<FriendTag>> listFriendTags() async => [..._friendTags];
+
+  @override
+  Future<FriendTag> createFriendTag(String name) async {
+    final now = DateTime.now();
+    final tag = FriendTag(
+      id: now.microsecondsSinceEpoch,
+      userId: _session?.user.id ?? 0,
+      name: name.trim(),
+      createdAt: now,
+      updatedAt: now,
+    );
+    _friendTags = [tag, ..._friendTags];
+    return tag;
+  }
+
+  @override
+  Future<FriendTag> renameFriendTag(int tagId, String name) async {
+    final existing = _friendTags.firstWhere((item) => item.id == tagId);
+    final renamed = existing.copyWith(name: name.trim(), updatedAt: DateTime.now());
+    _friendTags = _friendTags.map((item) => item.id == tagId ? renamed : item).toList();
+    _friends = _friends
+        .map((friendship) => friendship.copyWith(
+              tags: friendship.tags
+                  .map((tag) => tag.id == tagId ? renamed : tag)
+                  .toList(),
+            ))
+        .toList();
+    return renamed;
+  }
+
+  @override
+  Future<void> deleteFriendTag(int tagId) async {
+    _friendTags = _friendTags.where((item) => item.id != tagId).toList();
+    _friends = _friends
+        .map((friendship) => friendship.copyWith(
+              tags: friendship.tags.where((tag) => tag.id != tagId).toList(),
+            ))
+        .toList();
+  }
+
+  @override
+  Future<Friendship> setFriendTags(int friendId, List<int> tagIds) async {
+    final tagIdSet = tagIds.toSet();
+    final tags = _friendTags.where((tag) => tagIdSet.contains(tag.id)).toList();
+    late Friendship updated;
+    _friends = _friends.map((friendship) {
+      if (friendship.id != friendId) return friendship;
+      updated = friendship.copyWith(tags: tags);
+      return updated;
+    }).toList();
+    return updated;
+  }
+
+  @override
+  Future<Friendship> removeFriendTag(int friendId, int tagId) async {
+    late Friendship updated;
+    _friends = _friends.map((friendship) {
+      if (friendship.id != friendId) return friendship;
+      updated = friendship.copyWith(
+        tags: friendship.tags.where((tag) => tag.id != tagId).toList(),
+      );
+      return updated;
+    }).toList();
+    return updated;
+  }
+
+  @override
+  Future<UnifiedSearchResult> search(
+    String query, {
+    List<String> scopes = const [],
+    int? conversationId,
+    int? cursorCreatedAt,
+    int? cursorId,
+    int limit = 20,
+  }) async {
+    final value = query.trim().toLowerCase();
+    if (value.isEmpty) return const UnifiedSearchResult();
+    final friendResults = _friends
+        .where((friendship) =>
+            friendship.user.nickname.toLowerCase().contains(value) ||
+            friendship.user.email.toLowerCase().contains(value) ||
+            friendship.tags.any((tag) => tag.name.toLowerCase().contains(value)))
+        .map((friendship) => SearchFriendResult(
+              friendship: friendship,
+              user: friendship.user,
+              snippet: friendship.user.nickname,
+            ))
+        .toList();
+    final conversationResults = _conversations
+        .where((conversation) => conversation.name.toLowerCase().contains(value))
+        .map((conversation) => SearchConversationResult(
+              conversation: conversation,
+              snippet: conversation.name,
+            ))
+        .toList();
+    final messageResults = _messages.values
+        .expand((messages) => messages)
+        .where((message) =>
+            (conversationId == null || message.conversationId == conversationId) &&
+            message.content.toLowerCase().contains(value))
+        .map((message) => SearchMessageResult(
+              message: message,
+              snippet: message.content,
+            ))
+        .toList();
+    return UnifiedSearchResult(
+      friends: friendResults,
+      conversations: conversationResults,
+      messages: messageResults.take(limit).toList(),
+    );
   }
 
   @override
@@ -596,6 +712,14 @@ class FakeAimRepository implements AimRepository {
         ),
       ],
     };
+    final tag = FriendTag(
+      id: 7001,
+      userId: user.id,
+      name: '同事',
+      createdAt: now.subtract(const Duration(days: 5)),
+      updatedAt: now.subtract(const Duration(days: 1)),
+    );
+    _friendTags = [tag];
     _friends = [
       Friendship(
         id: alice.id,
@@ -603,6 +727,7 @@ class FakeAimRepository implements AimRepository {
         status: FriendStatus.accepted,
         createdAt: now.subtract(const Duration(days: 3)),
         updatedAt: now.subtract(const Duration(days: 1)),
+        tags: [tag],
       ),
       Friendship(
         id: bob.id,

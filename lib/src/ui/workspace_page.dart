@@ -1085,14 +1085,16 @@ class _MessageContent extends StatelessWidget {
                 controller: controller,
                 payload: attachment,
               ),
-      MessageType.file =>
+      MessageType.video || MessageType.audio || MessageType.file =>
         attachment == null
             ? _LegacyFileContent(name: message.content)
             : _AttachmentMessageCard(
                 controller: controller,
                 payload: attachment,
               ),
-      MessageType.system => Text(message.content),
+      MessageType.system => Text(
+        SystemMessageEvent.displayText(message.content),
+      ),
     };
   }
 }
@@ -2254,7 +2256,9 @@ class _FriendsSection extends StatelessWidget {
         children: [
           SectionTitle(
             title: '好友列表',
-            subtitle: '查看好友资料与在线状态。',
+            subtitle: state.friendTags.isEmpty
+                ? '查看好友资料与在线状态。'
+                : '已同步 ${state.friendTags.length} 个好友标签，可用左侧搜索按昵称、邮箱或标签筛选。',
             trailing: FilledButton.icon(
               onPressed: () => _showAddFriendDialog(context, controller),
               icon: const Icon(Icons.person_add_rounded),
@@ -2262,7 +2266,7 @@ class _FriendsSection extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          for (final friendship in state.friends) ...[
+          for (final friendship in state.filteredFriends) ...[
             _FriendTile(
               friendship: friendship,
               trailing: FilledButton.tonalIcon(
@@ -2357,11 +2361,23 @@ class _FriendTile extends StatelessWidget {
                 style: const TextStyle(color: AimColors.muted, fontSize: 12),
               ),
               const SizedBox(height: 6),
-              StatusPill(
-                label: friendStatusLabel(friendship.status),
-                color: friendship.status == FriendStatus.pending
-                    ? AimColors.warning
-                    : AimColors.success,
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  StatusPill(
+                    label: friendStatusLabel(friendship.status),
+                    color: friendship.status == FriendStatus.pending
+                        ? AimColors.warning
+                        : AimColors.success,
+                  ),
+                  for (final tag in friendship.tags)
+                    StatusPill(
+                      label: tag.name,
+                      icon: Icons.label_rounded,
+                      color: AimColors.accent,
+                    ),
+                ],
               ),
             ],
           ),

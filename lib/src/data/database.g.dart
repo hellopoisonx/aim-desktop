@@ -998,7 +998,7 @@ class $LocalReadStatesTable extends LocalReadStates
     aliasedName,
     false,
     type: DriftSqlType.int,
-    requiredDuringInsert: false,
+    requiredDuringInsert: true,
   );
   static const VerificationMeta _userIdMeta = const VerificationMeta('userId');
   @override
@@ -1058,6 +1058,8 @@ class $LocalReadStatesTable extends LocalReadStates
           _conversationIdMeta,
         ),
       );
+    } else if (isInserting) {
+      context.missing(_conversationIdMeta);
     }
     if (data.containsKey('user_id')) {
       context.handle(
@@ -1090,7 +1092,7 @@ class $LocalReadStatesTable extends LocalReadStates
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => {conversationId};
+  Set<GeneratedColumn> get $primaryKey => {conversationId, userId};
   @override
   LocalReadStateEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
@@ -1227,18 +1229,22 @@ class LocalReadStatesCompanion extends UpdateCompanion<LocalReadStateEntry> {
   final Value<int> userId;
   final Value<int> lastReadMessageId;
   final Value<DateTime> updatedAt;
+  final Value<int> rowid;
   const LocalReadStatesCompanion({
     this.conversationId = const Value.absent(),
     this.userId = const Value.absent(),
     this.lastReadMessageId = const Value.absent(),
     this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
   });
   LocalReadStatesCompanion.insert({
-    this.conversationId = const Value.absent(),
+    required int conversationId,
     required int userId,
     required int lastReadMessageId,
     required DateTime updatedAt,
-  }) : userId = Value(userId),
+    this.rowid = const Value.absent(),
+  }) : conversationId = Value(conversationId),
+       userId = Value(userId),
        lastReadMessageId = Value(lastReadMessageId),
        updatedAt = Value(updatedAt);
   static Insertable<LocalReadStateEntry> custom({
@@ -1246,12 +1252,14 @@ class LocalReadStatesCompanion extends UpdateCompanion<LocalReadStateEntry> {
     Expression<int>? userId,
     Expression<int>? lastReadMessageId,
     Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
       if (conversationId != null) 'conversation_id': conversationId,
       if (userId != null) 'user_id': userId,
       if (lastReadMessageId != null) 'last_read_message_id': lastReadMessageId,
       if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
     });
   }
 
@@ -1260,12 +1268,14 @@ class LocalReadStatesCompanion extends UpdateCompanion<LocalReadStateEntry> {
     Value<int>? userId,
     Value<int>? lastReadMessageId,
     Value<DateTime>? updatedAt,
+    Value<int>? rowid,
   }) {
     return LocalReadStatesCompanion(
       conversationId: conversationId ?? this.conversationId,
       userId: userId ?? this.userId,
       lastReadMessageId: lastReadMessageId ?? this.lastReadMessageId,
       updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
     );
   }
 
@@ -1284,6 +1294,9 @@ class LocalReadStatesCompanion extends UpdateCompanion<LocalReadStateEntry> {
     if (updatedAt.present) {
       map['updated_at'] = Variable<DateTime>(updatedAt.value);
     }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
     return map;
   }
 
@@ -1293,7 +1306,8 @@ class LocalReadStatesCompanion extends UpdateCompanion<LocalReadStateEntry> {
           ..write('conversationId: $conversationId, ')
           ..write('userId: $userId, ')
           ..write('lastReadMessageId: $lastReadMessageId, ')
-          ..write('updatedAt: $updatedAt')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
           ..write(')'))
         .toString();
   }
@@ -3580,10 +3594,11 @@ typedef $$LocalMessagesTableProcessedTableManager =
     >;
 typedef $$LocalReadStatesTableCreateCompanionBuilder =
     LocalReadStatesCompanion Function({
-      Value<int> conversationId,
+      required int conversationId,
       required int userId,
       required int lastReadMessageId,
       required DateTime updatedAt,
+      Value<int> rowid,
     });
 typedef $$LocalReadStatesTableUpdateCompanionBuilder =
     LocalReadStatesCompanion Function({
@@ -3591,6 +3606,7 @@ typedef $$LocalReadStatesTableUpdateCompanionBuilder =
       Value<int> userId,
       Value<int> lastReadMessageId,
       Value<DateTime> updatedAt,
+      Value<int> rowid,
     });
 
 class $$LocalReadStatesTableFilterComposer
@@ -3720,23 +3736,27 @@ class $$LocalReadStatesTableTableManager
                 Value<int> userId = const Value.absent(),
                 Value<int> lastReadMessageId = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
               }) => LocalReadStatesCompanion(
                 conversationId: conversationId,
                 userId: userId,
                 lastReadMessageId: lastReadMessageId,
                 updatedAt: updatedAt,
+                rowid: rowid,
               ),
           createCompanionCallback:
               ({
-                Value<int> conversationId = const Value.absent(),
+                required int conversationId,
                 required int userId,
                 required int lastReadMessageId,
                 required DateTime updatedAt,
+                Value<int> rowid = const Value.absent(),
               }) => LocalReadStatesCompanion.insert(
                 conversationId: conversationId,
                 userId: userId,
                 lastReadMessageId: lastReadMessageId,
                 updatedAt: updatedAt,
+                rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))

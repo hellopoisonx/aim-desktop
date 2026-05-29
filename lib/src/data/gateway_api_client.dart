@@ -266,6 +266,62 @@ class GatewayApiClient {
     ).map((item) => _friendshipFromJson(currentUser, _asMap(item))).toList();
   }
 
+  Future<List<FriendTag>> listFriendTags() async {
+    final response = await _dio.get<Map<String, dynamic>>('/api/friends/tags');
+    return _list(
+      _body(response.data)['tags'],
+    ).map((item) => _friendTagFromJson(_asMap(item))).toList();
+  }
+
+  Future<FriendTag> createFriendTag(String name) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/api/friends/tags',
+      data: {'name': name.trim()},
+    );
+    return _friendTagFromJson(_asMap(_body(response.data)['tag']));
+  }
+
+  Future<FriendTag> renameFriendTag(int tagId, String name) async {
+    final response = await _dio.put<Map<String, dynamic>>(
+      '/api/friends/tags/$tagId',
+      data: {'name': name.trim()},
+    );
+    return _friendTagFromJson(_asMap(_body(response.data)['tag']));
+  }
+
+  Future<void> deleteFriendTag(int tagId) async {
+    await _dio.delete<void>('/api/friends/tags/$tagId');
+  }
+
+  Future<Friendship> setFriendTags(
+    UserProfile currentUser,
+    int friendId,
+    List<int> tagIds,
+  ) async {
+    final response = await _dio.put<Map<String, dynamic>>(
+      '/api/friends/$friendId/tags',
+      data: {'tag_ids': tagIds},
+    );
+    return _friendshipFromJson(
+      currentUser,
+      _asMap(_body(response.data)['friendship']),
+    );
+  }
+
+  Future<Friendship> removeFriendTag(
+    UserProfile currentUser,
+    int friendId,
+    int tagId,
+  ) async {
+    final response = await _dio.delete<Map<String, dynamic>>(
+      '/api/friends/$friendId/tags/$tagId',
+    );
+    return _friendshipFromJson(
+      currentUser,
+      _asMap(_body(response.data)['friendship']),
+    );
+  }
+
   Future<Friendship> acceptFriend(
     UserProfile currentUser,
     int applicationId,
@@ -464,6 +520,79 @@ class GatewayApiClient {
         ),
       );
     }).toList();
+  }
+
+  Future<UnifiedSearchResult> search(
+    String query, {
+    required UserProfile currentUser,
+    List<String> scopes = const [],
+    int? conversationId,
+    int? cursorCreatedAt,
+    int? cursorId,
+    int limit = 20,
+  }) async {
+    final queryParams = <String, dynamic>{
+      'q': query.trim(),
+      'limit': limit.clamp(1, 100),
+    };
+    if (scopes.isNotEmpty) {
+      queryParams['scope'] = scopes.map((scope) => scope.trim()).join(',');
+    }
+    if (conversationId != null && conversationId > 0) {
+      queryParams['conversation_id'] = conversationId;
+    }
+    if (cursorCreatedAt != null && cursorCreatedAt > 0) {
+      queryParams['cursor_created_at'] = cursorCreatedAt;
+    }
+    if (cursorId != null && cursorId > 0) {
+      queryParams['cursor_id'] = cursorId;
+    }
+
+    final response = await _dio.get<Map<String, dynamic>>(
+      '/api/search',
+      queryParameters: queryParams,
+    );
+    final body = _body(response.data);
+    return UnifiedSearchResult(
+      users: _list(body['users']).map((item) {
+        final raw = _asMap(item);
+        return SearchUserResult(
+          user: _userFromJson(_asMap(raw['user'])),
+          snippet: _asString(raw['snippet']),
+        );
+      }).toList(),
+      friends: _list(body['friends']).map((item) {
+        final raw = _asMap(item);
+        final friendship = _friendshipFromJson(
+          currentUser,
+          _asMap(raw['friendship']),
+        );
+        return SearchFriendResult(
+          friendship: friendship,
+          user: raw['user'] == null
+              ? friendship.user
+              : _userFromJson(_asMap(raw['user'])),
+          snippet: _asString(raw['snippet']),
+        );
+      }).toList(),
+      conversations: _list(body['conversations']).map((item) {
+        final raw = _asMap(item);
+        return SearchConversationResult(
+          conversation: _conversationFromJson(_asMap(raw['conversation'])),
+          snippet: _asString(raw['snippet']),
+        );
+      }).toList(),
+      messages: _list(body['messages']).map((item) {
+        final raw = _asMap(item);
+        return SearchMessageResult(
+          message: _messageFromJson(_asMap(raw['message'])),
+          snippet: _asString(raw['snippet']),
+        );
+      }).toList(),
+      nextCursorCreatedAt: _asInt(body['next_cursor_created_at']),
+      nextCursorId: _asInt(body['next_cursor_id']),
+      hasMore: body['has_more'] == true,
+    );
   }
 
   Future<AttachmentUploadTicket> createAttachmentUploadTicket({
@@ -837,6 +966,19 @@ Friendship _friendshipFromJson(
     createdAt: _dateFromMs(json['created_at']),
     updatedAt: _dateFromMs(json['updated_at']),
     incoming: friendId == currentUser.id && status == FriendStatus.pending,
+    tags: _list(json['tags'])
+        .map((item) => _friendTagFromJson(_asMap(item)))
+        .toList(),
+  );
+}
+
+FriendTag _friendTagFromJson(Map<String, dynamic> json) {
+  return FriendTag(
+    id: _asInt(json['id']),
+    userId: _asInt(json['user_id']),
+    name: _asString(json['name']),
+    createdAt: _dateFromMs(json['created_at']),
+    updatedAt: _dateFromMs(json['updated_at']),
   );
 }
 
@@ -932,14 +1074,7 @@ ConversationType _conversationType(String value) {
   return value == 'group' ? ConversationType.group : ConversationType.direct;
 }
 
-MessageType _messageType(String value) {
-  return switch (value) {
-    'image' => MessageType.image,
-    'file' || 'audio' || 'video' => MessageType.file,
-    'system' => MessageType.system,
-    _ => MessageType.text,
-  };
-}
+MessageType _messageType(String value) => messageTypeFromWireValue(value);
 
 FriendStatus _friendStatus(String value) {
   return switch (value) {

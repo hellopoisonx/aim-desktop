@@ -32,8 +32,10 @@ class GatewayAimRepository implements AimRepository {
   Future<String?> _refreshAccessToken() async {
     final current = _session;
     if (current == null) {
-      debugPrint('[AuthInterceptor] _refreshAccessToken: _session is null, '
-          'skipping refresh');
+      debugPrint(
+        '[AuthInterceptor] _refreshAccessToken: _session is null, '
+        'skipping refresh',
+      );
       return null;
     }
     debugPrint('[AuthInterceptor] _refreshAccessToken: refreshing token...');
@@ -207,6 +209,7 @@ class GatewayAimRepository implements AimRepository {
         messagesByConversation: histories,
         friends: const [],
         friendRequests: const [],
+        friendTags: const [],
         attachments: const [],
         orders: const [],
       );
@@ -242,6 +245,9 @@ class GatewayAimRepository implements AimRepository {
     final requests = await _apiClient
         .listFriendApplications(user)
         .catchError((_) => <Friendship>[]);
+    final friendTags = await _apiClient
+        .listFriendTags()
+        .catchError((_) => <FriendTag>[]);
     final presences = await _apiClient.getFriendsPresence().catchError(
       (_) => <PresenceItem>[],
     );
@@ -261,6 +267,7 @@ class GatewayAimRepository implements AimRepository {
         createdAt: f.createdAt,
         updatedAt: f.updatedAt,
         incoming: f.incoming,
+        tags: f.tags,
       );
     }).toList();
 
@@ -272,6 +279,7 @@ class GatewayAimRepository implements AimRepository {
       messagesByConversation: histories,
       friends: friendsWithPresence,
       friendRequests: requests,
+      friendTags: friendTags,
       attachments: const [],
       orders: const [],
     );
@@ -365,29 +373,35 @@ class GatewayAimRepository implements AimRepository {
     final payload = AttachmentMessagePayload.tryParse(msg.content);
     if (payload == null || payload.fileId.isEmpty) return;
     try {
-      db.into(db.localAttachments).insertOnConflictUpdate(
-        LocalAttachmentsCompanion(
-          attachmentId: Value(payload.fileId),
-          conversationId: Value(payload.conversationId > 0
-              ? payload.conversationId
-              : msg.conversationId),
-          kind: Value(payload.kind),
-          name: Value(payload.name),
-          mime: Value(payload.mime),
-          sizeBytes: Value(payload.sizeBytes),
-          sizeLabel: Value(payload.sizeLabel),
-          status: Value(payload.status),
-          parseStatus: Value(payload.parseStatus),
-          downloadUrl: Value(payload.downloadUrl),
-          thumbnailUrl: Value(payload.thumbnailFileId.isNotEmpty
-              ? payload.thumbnailFileId
-              : payload.thumbnailUrl),
-          width: Value(payload.width),
-          height: Value(payload.height),
-          durationMs: Value(payload.durationMs),
-          createdAt: Value(msg.createdAt),
-        ),
-      );
+      db
+          .into(db.localAttachments)
+          .insertOnConflictUpdate(
+            LocalAttachmentsCompanion(
+              attachmentId: Value(payload.fileId),
+              conversationId: Value(
+                payload.conversationId > 0
+                    ? payload.conversationId
+                    : msg.conversationId,
+              ),
+              kind: Value(payload.kind),
+              name: Value(payload.name),
+              mime: Value(payload.mime),
+              sizeBytes: Value(payload.sizeBytes),
+              sizeLabel: Value(payload.sizeLabel),
+              status: Value(payload.status),
+              parseStatus: Value(payload.parseStatus),
+              downloadUrl: Value(payload.downloadUrl),
+              thumbnailUrl: Value(
+                payload.thumbnailFileId.isNotEmpty
+                    ? payload.thumbnailFileId
+                    : payload.thumbnailUrl,
+              ),
+              width: Value(payload.width),
+              height: Value(payload.height),
+              durationMs: Value(payload.durationMs),
+              createdAt: Value(msg.createdAt),
+            ),
+          );
     } catch (_) {
       // Best-effort
     }
@@ -434,23 +448,10 @@ class GatewayAimRepository implements AimRepository {
     }
   }
 
-  String _messageTypeStr(MessageType type) {
-    return switch (type) {
-      MessageType.image => 'image',
-      MessageType.file => 'file',
-      MessageType.system => 'system',
-      MessageType.text => 'text',
-    };
-  }
+  String _messageTypeStr(MessageType type) => messageTypeToWireValue(type);
 
-  MessageType _messageTypeFromString(String value) {
-    return switch (value) {
-      'image' => MessageType.image,
-      'file' || 'audio' || 'video' => MessageType.file,
-      'system' => MessageType.system,
-      _ => MessageType.text,
-    };
-  }
+  MessageType _messageTypeFromString(String value) =>
+      messageTypeFromWireValue(value);
 
   MessageStatus _messageStatusFromLocal(int value) {
     return switch (value) {
@@ -515,14 +516,16 @@ class GatewayAimRepository implements AimRepository {
     required String clientMessageId,
     required DateTime createdAt,
   }) async {
-    final messageType = switch (payload.kind) {
-      'image' || 'video' || 'audio' => payload.kind,
-      _ => payload.isImage ? 'image' : 'file',
-    };
+    final messageType = messageTypeToWireValue(
+      messageTypeFromAttachmentPayload(payload),
+    );
     final ack = await _realtimeClient.sendMessage(
       conversationId: conversationId,
       messageType: messageType,
-      content: payload.toJsonString(includeLocalPreview: false),
+      content: payload.toJsonString(
+        includeLocalPreview: false,
+        includeClientFields: false,
+      ),
       clientMessageId: clientMessageId,
     );
     final msg = ChatMessage(
@@ -530,7 +533,7 @@ class GatewayAimRepository implements AimRepository {
       conversationId: conversationId,
       senderId: sender.id,
       senderName: sender.nickname,
-      type: payload.isImage ? MessageType.image : MessageType.file,
+      type: messageTypeFromAttachmentPayload(payload),
       content: displayContent,
       createdAt: createdAt,
       clientMessageId: clientMessageId,
@@ -567,6 +570,68 @@ class GatewayAimRepository implements AimRepository {
   @override
   Future<List<UserProfile>> searchUsers(String keyword) {
     return _apiClient.searchUsers(keyword);
+  }
+
+  @override
+  Future<List<FriendTag>> listFriendTags() {
+    return _apiClient.listFriendTags();
+  }
+
+  @override
+  Future<FriendTag> createFriendTag(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) throw ArgumentError('标签名称不能为空');
+    return _apiClient.createFriendTag(trimmed);
+  }
+
+  @override
+  Future<FriendTag> renameFriendTag(int tagId, String name) {
+    final trimmed = name.trim();
+    if (tagId <= 0) throw ArgumentError('标签 ID 无效');
+    if (trimmed.isEmpty) throw ArgumentError('标签名称不能为空');
+    return _apiClient.renameFriendTag(tagId, trimmed);
+  }
+
+  @override
+  Future<void> deleteFriendTag(int tagId) {
+    if (tagId <= 0) throw ArgumentError('标签 ID 无效');
+    return _apiClient.deleteFriendTag(tagId);
+  }
+
+  @override
+  Future<Friendship> setFriendTags(int friendId, List<int> tagIds) {
+    final currentUser = _session?.user;
+    if (currentUser == null) throw StateError('请先登录');
+    return _apiClient.setFriendTags(currentUser, friendId, tagIds);
+  }
+
+  @override
+  Future<Friendship> removeFriendTag(int friendId, int tagId) {
+    final currentUser = _session?.user;
+    if (currentUser == null) throw StateError('请先登录');
+    return _apiClient.removeFriendTag(currentUser, friendId, tagId);
+  }
+
+  @override
+  Future<UnifiedSearchResult> search(
+    String query, {
+    List<String> scopes = const [],
+    int? conversationId,
+    int? cursorCreatedAt,
+    int? cursorId,
+    int limit = 20,
+  }) {
+    final currentUser = _session?.user;
+    if (currentUser == null) return Future.value(const UnifiedSearchResult());
+    return _apiClient.search(
+      query,
+      currentUser: currentUser,
+      scopes: scopes,
+      conversationId: conversationId,
+      cursorCreatedAt: cursorCreatedAt,
+      cursorId: cursorId,
+      limit: limit,
+    );
   }
 
   @override

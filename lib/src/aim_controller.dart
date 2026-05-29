@@ -377,7 +377,7 @@ class AimController extends ChangeNotifier {
       conversationId: conversation.id,
       senderId: currentUser.id,
       senderName: currentUser.nickname,
-      type: localAttachment.isImage ? MessageType.image : MessageType.file,
+      type: messageTypeFromAttachmentKind(kind: kind, mime: normalizedMime),
       // 不把本地预览（base64）写进消息正文：消息列表会频繁重建，
       // 大字符串反复 jsonEncode/jsonDecode 会造成明显卡顿。预览数据只保存在
       // attachments 状态里，由 UI 按 file_id 关联读取。
@@ -1033,6 +1033,7 @@ class AimController extends ChangeNotifier {
           messagesByConversation: localData.messagesByConversation,
           friends: localData.friends,
           friendRequests: localData.friendRequests,
+          friendTags: localData.friendTags,
           attachments: localData.attachments,
           orders: localData.orders,
           selectedConversationId: null,
@@ -1061,6 +1062,7 @@ class AimController extends ChangeNotifier {
         messagesByConversation: bootstrap.messagesByConversation,
         friends: bootstrap.friends,
         friendRequests: bootstrap.friendRequests,
+        friendTags: bootstrap.friendTags,
         attachments: bootstrap.attachments,
         orders: bootstrap.orders,
         selectedConversationId: null,
@@ -1088,6 +1090,7 @@ class AimController extends ChangeNotifier {
           messagesByConversation: bootstrap.messagesByConversation,
           friends: bootstrap.friends,
           friendRequests: bootstrap.friendRequests,
+          friendTags: bootstrap.friendTags,
           attachments: bootstrap.attachments,
           orders: bootstrap.orders,
           notice: successMessage,
@@ -1102,6 +1105,7 @@ class AimController extends ChangeNotifier {
           messagesByConversation: bootstrap.messagesByConversation,
           friends: bootstrap.friends,
           friendRequests: bootstrap.friendRequests,
+          friendTags: bootstrap.friendTags,
           attachments: bootstrap.attachments,
           orders: bootstrap.orders,
           notice: successMessage,
@@ -1141,6 +1145,7 @@ class AimController extends ChangeNotifier {
             messagesByConversation: localData.messagesByConversation,
             friends: localData.friends,
             friendRequests: localData.friendRequests,
+            friendTags: localData.friendTags,
             attachments: localData.attachments,
             orders: localData.orders,
             selectedConversationId: null,
@@ -1497,6 +1502,7 @@ class AimController extends ChangeNotifier {
           createdAt: friendship.createdAt,
           updatedAt: DateTime.now(),
           incoming: friendship.incoming,
+          tags: friendship.tags,
         );
       }).toList(),
     );
@@ -1739,7 +1745,7 @@ class AimController extends ChangeNotifier {
     ChatMessage message,
   ) {
     final currentUserId = _state.currentUser?.id;
-    final isDirect = event.conversationType == 'direct';
+    final isDirect = event.conversationType != 'group';
     final fallbackName = isDirect
         ? (event.senderId == currentUserId
               ? '直聊 ${event.conversationId}'
@@ -1810,14 +1816,8 @@ class AimController extends ChangeNotifier {
     return '成员 $userId';
   }
 
-  MessageType _messageTypeFromString(String value) {
-    return switch (value) {
-      'image' => MessageType.image,
-      'file' || 'audio' || 'video' => MessageType.file,
-      'system' => MessageType.system,
-      _ => MessageType.text,
-    };
-  }
+  MessageType _messageTypeFromString(String value) =>
+      messageTypeFromWireValue(value);
 
   static String _newDeviceId() {
     final random = Random.secure();

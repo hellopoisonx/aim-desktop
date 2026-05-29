@@ -134,7 +134,7 @@ class LocalReadStates extends Table {
   DateTimeColumn get updatedAt => dateTime()();
 
   @override
-  Set<Column> get primaryKey => {conversationId};
+  Set<Column> get primaryKey => {conversationId, userId};
 }
 
 @DataClassName('LocalConversationEntry')
@@ -233,12 +233,21 @@ class AimLocalDatabase extends _$AimLocalDatabase {
   AimLocalDatabase._internal(super.executor);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) async {
       await m.createAll();
+    },
+    onUpgrade: (m, from, to) async {
+      if (from < 2) {
+        // v2 aligns read states with the server schema:
+        // PRIMARY KEY (conversation_id, user_id). The table only caches
+        // server-authoritative cursors, so dropping stale v1 rows is safe.
+        await m.deleteTable('local_read_states');
+        await m.createTable(localReadStates);
+      }
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');

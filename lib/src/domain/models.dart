@@ -16,9 +16,53 @@ enum AppSection {
 
 enum ConversationType { direct, group }
 
-enum MessageType { text, image, file, system }
+enum MessageType { text, image, video, audio, file, system }
 
 enum MessageStatus { received, sending, sent, failed }
+
+MessageType messageTypeFromWireValue(String value) {
+  return switch (value) {
+    'image' => MessageType.image,
+    'video' => MessageType.video,
+    'audio' => MessageType.audio,
+    'file' => MessageType.file,
+    'system' => MessageType.system,
+    _ => MessageType.text,
+  };
+}
+
+String messageTypeToWireValue(MessageType type) {
+  return switch (type) {
+    MessageType.image => 'image',
+    MessageType.video => 'video',
+    MessageType.audio => 'audio',
+    MessageType.file => 'file',
+    MessageType.system => 'system',
+    MessageType.text => 'text',
+  };
+}
+
+MessageType messageTypeFromAttachmentKind({
+  required String kind,
+  String mime = '',
+}) {
+  final normalizedKind = kind.trim().toLowerCase();
+  final normalizedMime = mime.trim().toLowerCase();
+  return switch (normalizedKind) {
+    'image' => MessageType.image,
+    'video' => MessageType.video,
+    'audio' => MessageType.audio,
+    'file' => MessageType.file,
+    _ when normalizedMime.startsWith('image/') => MessageType.image,
+    _ when normalizedMime.startsWith('video/') => MessageType.video,
+    _ when normalizedMime.startsWith('audio/') => MessageType.audio,
+    _ => MessageType.file,
+  };
+}
+
+MessageType messageTypeFromAttachmentPayload(AttachmentMessagePayload payload) {
+  return messageTypeFromAttachmentKind(kind: payload.kind, mime: payload.mime);
+}
 
 enum FriendStatus { pending, accepted, rejected }
 
@@ -207,6 +251,32 @@ class ChatMessage {
   }
 }
 
+class FriendTag {
+  const FriendTag({
+    required this.id,
+    required this.userId,
+    required this.name,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final int id;
+  final int userId;
+  final String name;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  FriendTag copyWith({String? name, DateTime? updatedAt}) {
+    return FriendTag(
+      id: id,
+      userId: userId,
+      name: name ?? this.name,
+      createdAt: createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+}
+
 class Friendship {
   const Friendship({
     required this.id,
@@ -215,6 +285,7 @@ class Friendship {
     required this.createdAt,
     required this.updatedAt,
     this.incoming = false,
+    this.tags = const [],
   });
 
   /// 对端用户 ID（好友申请接口不返回单独关系 ID，客户端以对端用户 ID 作为操作标识）。
@@ -224,15 +295,22 @@ class Friendship {
   final DateTime createdAt;
   final DateTime updatedAt;
   final bool incoming;
+  final List<FriendTag> tags;
 
-  Friendship copyWith({FriendStatus? status, bool? incoming}) {
+  Friendship copyWith({
+    FriendStatus? status,
+    bool? incoming,
+    List<FriendTag>? tags,
+    DateTime? updatedAt,
+  }) {
     return Friendship(
       id: id,
       user: user,
       status: status ?? this.status,
       createdAt: createdAt,
-      updatedAt: DateTime.now(),
+      updatedAt: updatedAt ?? DateTime.now(),
       incoming: incoming ?? this.incoming,
+      tags: tags ?? this.tags,
     );
   }
 }
@@ -530,8 +608,12 @@ class AttachmentMessagePayload {
   }
 
   /// 序列化为符合 aim.attachment.v1 schema 的 JSON 对象。
-  /// [includeLocalPreview] 控制是否写入本地预览 data URI（发送到服务端时排除）。
-  Map<String, dynamic> toJson({bool includeLocalPreview = true}) {
+  /// [includeLocalPreview] 控制是否写入本地预览 data URI。
+  /// [includeClientFields] 控制是否写入客户端展示/缓存字段；发送到服务端时应为 false。
+  Map<String, dynamic> toJson({
+    bool includeLocalPreview = true,
+    bool includeClientFields = true,
+  }) {
     final effectiveParseStatus = parseStatus.trim().isEmpty
         ? 'pending'
         : parseStatus.trim();
@@ -549,18 +631,28 @@ class AttachmentMessagePayload {
       if (durationMs != null) 'duration_ms': durationMs,
       if (width != null) 'width': width,
       if (height != null) 'height': height,
-      if (conversationId > 0) 'conversation_id': conversationId,
-      if (status.isNotEmpty) 'status': status,
-      if (sizeLabel.isNotEmpty) 'size_label': sizeLabel,
-      if (downloadUrl.isNotEmpty) 'download_url': downloadUrl,
       if (metadata.isNotEmpty) 'metadata': metadata,
-      if (includeLocalPreview && localPreviewDataUri.isNotEmpty)
-        'local_preview_data_uri': localPreviewDataUri,
+      if (includeClientFields) ...{
+        if (conversationId > 0) 'conversation_id': conversationId,
+        if (status.isNotEmpty) 'status': status,
+        if (sizeLabel.isNotEmpty) 'size_label': sizeLabel,
+        if (downloadUrl.isNotEmpty) 'download_url': downloadUrl,
+        if (includeLocalPreview && localPreviewDataUri.isNotEmpty)
+          'local_preview_data_uri': localPreviewDataUri,
+      },
     };
   }
 
-  String toJsonString({bool includeLocalPreview = true}) {
-    return jsonEncode(toJson(includeLocalPreview: includeLocalPreview));
+  String toJsonString({
+    bool includeLocalPreview = true,
+    bool includeClientFields = true,
+  }) {
+    return jsonEncode(
+      toJson(
+        includeLocalPreview: includeLocalPreview,
+        includeClientFields: includeClientFields,
+      ),
+    );
   }
 }
 
@@ -594,6 +686,68 @@ class AppNotification {
   final DateTime createdAt;
 }
 
+class SearchUserResult {
+  const SearchUserResult({required this.user, required this.snippet});
+
+  final UserProfile user;
+  final String snippet;
+}
+
+class SearchFriendResult {
+  const SearchFriendResult({
+    required this.friendship,
+    required this.user,
+    required this.snippet,
+  });
+
+  final Friendship friendship;
+  final UserProfile user;
+  final String snippet;
+}
+
+class SearchConversationResult {
+  const SearchConversationResult({
+    required this.conversation,
+    required this.snippet,
+  });
+
+  final Conversation conversation;
+  final String snippet;
+}
+
+class SearchMessageResult {
+  const SearchMessageResult({required this.message, required this.snippet});
+
+  final ChatMessage message;
+  final String snippet;
+}
+
+class UnifiedSearchResult {
+  const UnifiedSearchResult({
+    this.users = const [],
+    this.friends = const [],
+    this.conversations = const [],
+    this.messages = const [],
+    this.nextCursorCreatedAt = 0,
+    this.nextCursorId = 0,
+    this.hasMore = false,
+  });
+
+  final List<SearchUserResult> users;
+  final List<SearchFriendResult> friends;
+  final List<SearchConversationResult> conversations;
+  final List<SearchMessageResult> messages;
+  final int nextCursorCreatedAt;
+  final int nextCursorId;
+  final bool hasMore;
+
+  bool get isEmpty =>
+      users.isEmpty &&
+      friends.isEmpty &&
+      conversations.isEmpty &&
+      messages.isEmpty;
+}
+
 class ServiceOrder {
   const ServiceOrder({
     required this.id,
@@ -621,6 +775,7 @@ class AimState {
     required this.messagesByConversation,
     required this.friends,
     required this.friendRequests,
+    required this.friendTags,
     required this.attachments,
     required this.orders,
     required this.notifications,
@@ -641,6 +796,7 @@ class AimState {
       messagesByConversation: {},
       friends: [],
       friendRequests: [],
+      friendTags: [],
       attachments: [],
       orders: [],
       notifications: [],
@@ -656,6 +812,7 @@ class AimState {
   final Map<int, List<ChatMessage>> messagesByConversation;
   final List<Friendship> friends;
   final List<Friendship> friendRequests;
+  final List<FriendTag> friendTags;
   final List<AttachmentItem> attachments;
   final List<ServiceOrder> orders;
   final List<AppNotification> notifications;
@@ -693,6 +850,19 @@ class AimState {
     }).toList();
   }
 
+  List<Friendship> get filteredFriends {
+    final keyword = searchQuery.trim().toLowerCase();
+    final sorted = [...friends]
+      ..sort((a, b) => a.user.nickname.compareTo(b.user.nickname));
+    if (keyword.isEmpty) return sorted;
+    return sorted.where((friendship) {
+      final user = friendship.user;
+      return user.nickname.toLowerCase().contains(keyword) ||
+          user.email.toLowerCase().contains(keyword) ||
+          friendship.tags.any((tag) => tag.name.toLowerCase().contains(keyword));
+    }).toList();
+  }
+
   int get totalUnread =>
       conversations.fold(0, (sum, item) => sum + item.unreadCount);
 
@@ -706,6 +876,7 @@ class AimState {
     Map<int, List<ChatMessage>>? messagesByConversation,
     List<Friendship>? friends,
     List<Friendship>? friendRequests,
+    List<FriendTag>? friendTags,
     List<AttachmentItem>? attachments,
     List<ServiceOrder>? orders,
     List<AppNotification>? notifications,
@@ -725,6 +896,7 @@ class AimState {
           messagesByConversation ?? this.messagesByConversation,
       friends: friends ?? this.friends,
       friendRequests: friendRequests ?? this.friendRequests,
+      friendTags: friendTags ?? this.friendTags,
       attachments: attachments ?? this.attachments,
       orders: orders ?? this.orders,
       notifications: notifications ?? this.notifications,

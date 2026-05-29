@@ -38,6 +38,13 @@ void main() {
         payload.toJson(includeLocalPreview: false),
         isNot(contains('thumbnail_url')),
       );
+      final serverJson = payload.toJson(
+        includeLocalPreview: false,
+        includeClientFields: false,
+      );
+      expect(serverJson, isNot(contains('conversation_id')));
+      expect(serverJson, isNot(contains('status')));
+      expect(serverJson, isNot(contains('download_url')));
     });
 
     test('兼容旧 thumbnail_url：URL 与 object key 分开处理', () {
@@ -84,5 +91,57 @@ void main() {
     final payload = item.toMessagePayload();
     expect(payload.thumbnailFileId, item.thumbnailFileId);
     expect(payload.thumbnailUrl, item.thumbnailUrl);
+  });
+
+  test('消息类型映射保留 audio/video 附件类型', () {
+    expect(messageTypeFromWireValue('audio'), MessageType.audio);
+    expect(messageTypeFromWireValue('video'), MessageType.video);
+    expect(messageTypeToWireValue(MessageType.audio), 'audio');
+    expect(messageTypeToWireValue(MessageType.video), 'video');
+    expect(
+      messageTypeFromAttachmentKind(kind: 'audio', mime: 'audio/mpeg'),
+      MessageType.audio,
+    );
+    expect(
+      messageTypeFromAttachmentKind(kind: 'video', mime: 'video/mp4'),
+      MessageType.video,
+    );
+    expect(
+      messageTypeFromAttachmentKind(kind: 'file', mime: 'audio/mpeg'),
+      MessageType.file,
+    );
+  });
+
+  test('好友标签参与好友筛选', () {
+    final now = DateTime(2026);
+    final tag = FriendTag(
+      id: 1,
+      userId: 1001,
+      name: '同事',
+      createdAt: now,
+      updatedAt: now,
+    );
+    final state = AimState.initial().copyWith(
+      searchQuery: '同事',
+      friends: [
+        Friendship(
+          id: 2001,
+          user: const UserProfile(
+            id: 2001,
+            email: 'alice@example.test',
+            nickname: 'Alice',
+            avatarUrl: '',
+            status: PresenceStatus.online,
+          ),
+          status: FriendStatus.accepted,
+          createdAt: now,
+          updatedAt: now,
+          tags: [tag],
+        ),
+      ],
+    );
+
+    expect(state.filteredFriends, hasLength(1));
+    expect(state.filteredFriends.single.tags.single.name, '同事');
   });
 }
