@@ -10,6 +10,7 @@
 - **Token 刷新可靠性**：引入安全巡检定时器（每 30s 检查 token 是否即将过期），防止单次 Timer 被 OS 延迟导致连接过期
 - **Token 刷新退避重试**：失败时指数退避重试最多 3 次（1s → 2s → 4s），超过上限后提示用户手动检查
 - **AimState 搜索状态**：新增 `searchResults`（`UnifiedSearchResult?`）和 `isSearching`（`bool`）字段及其 `copyWith` 支持
+- **桌面端自动发布**：新增 GitHub Actions 工作流 `.github/workflows/release.yml`，支持在推送 `v*` tag 或手动触发时自动构建 Linux / Windows / macOS 桌面产物并发布到 GitHub Release
 
 ### 修复
 

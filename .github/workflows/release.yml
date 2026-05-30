@@ -1,0 +1,156 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag, for example v1.0.0. Defaults to pubspec.yaml version.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+            artifact_name: aim_desktop-linux-x64
+            artifact_path: aim_desktop-linux-x64.tar.gz
+          - platform: windows
+            os: windows-latest
+            artifact_name: aim_desktop-windows-x64
+            artifact_path: aim_desktop-windows-x64.zip
+          - platform: macos
+            os: macos-latest
+            artifact_name: aim_desktop-macos
+            artifact_path: aim_desktop-macos.zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            libgtk-3-dev \
+            libsecret-1-dev \
+            libsqlite3-dev \
+            ninja-build \
+            pkg-config \
+            xz-utils
+
+      - name: Read Flutter version
+        id: flutter-version
+        shell: bash
+        run: |
+          if [[ -f .fvmrc ]]; then
+            version="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvmrc | head -n 1)"
+          elif [[ -f .fvm/fvm_config.json ]]; then
+            version="$(sed -n 's/.*"flutterSdkVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvm/fvm_config.json | head -n 1)"
+          fi
+
+          if [[ -z "${version}" ]]; then
+            echo "No Flutter version found. Expected .fvmrc flutter or .fvm/fvm_config.json flutterSdkVersion" >&2
+            exit 1
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build Linux
+        if: matrix.platform == 'linux'
+        run: flutter build linux --release
+
+      - name: Package Linux
+        if: matrix.platform == 'linux'
+        run: tar -czf "${{ matrix.artifact_path }}" -C build/linux/x64/release/bundle .
+
+      - name: Build Windows
+        if: matrix.platform == 'windows'
+        run: flutter build windows --release
+
+      - name: Package Windows
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath "${{ matrix.artifact_path }}"
+
+      - name: Build macOS
+        if: matrix.platform == 'macos'
+        run: flutter build macos --release
+
+      - name: Package macOS
+        if: matrix.platform == 'macos'
+        run: ditto -c -k --sequesterRsrc --keepParent build/macos/Build/Products/Release/aim_desktop.app "${{ matrix.artifact_path }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ inputs.release_tag }}" ]]; then
+            tag="${{ inputs.release_tag }}"
+          else
+            version="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)"
+            tag="v${version}"
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: ${{ steps.release.outputs.tag }}
+          files: release-artifacts/*
+          generate_release_notes: true
