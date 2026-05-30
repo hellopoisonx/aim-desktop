@@ -262,6 +262,12 @@ class _ConversationSidebar extends StatelessWidget {
                   ),
                   const SizedBox(width: 10),
                   IconButton(
+                    tooltip: '全局搜索',
+                    onPressed: () =>
+                        _showGlobalSearchDialog(context, controller),
+                    icon: const Icon(Icons.manage_search_rounded),
+                  ),
+                  IconButton(
                     tooltip: '新建群聊',
                     onPressed: () =>
                         _showCreateGroupDialog(context, controller, state),
@@ -870,7 +876,8 @@ class _ChatHeader extends StatelessWidget {
           ),
           IconButton(
             tooltip: '搜索聊天记录',
-            onPressed: () => _showNotice(context, '聊天记录搜索功能即将推出'),
+            onPressed: () =>
+                _showSearchDialog(context, controller, conversation.id),
             icon: const Icon(Icons.search_rounded),
           ),
           IconButton(
@@ -3430,5 +3437,587 @@ extension _FirstOrNullExtension<T> on Iterable<T> {
     final iterator = this.iterator;
     if (iterator.moveNext()) return iterator.current;
     return null;
+  }
+}
+
+/// 显示搜索弹窗：支持全局聚合搜索和会话内消息搜索。
+Future<void> _showSearchDialog(
+  BuildContext context,
+  AimController controller,
+  int conversationId,
+) async {
+  final result = await showDialog<UnifiedSearchResult?>(
+    context: context,
+    builder: (ctx) {
+      return _SearchDialog(
+        controller: controller,
+        conversationId: conversationId,
+      );
+    },
+  );
+  if (result != null && result.messages.isNotEmpty) {
+    // 如果搜索结果中有消息，可高亮或滚动到对应消息
+    // 当前实现：结果已在弹窗内展示
+  }
+}
+
+class _SearchDialog extends ConsumerStatefulWidget {
+  const _SearchDialog({required this.controller, required this.conversationId});
+
+  final AimController controller;
+  final int conversationId;
+
+  @override
+  ConsumerState<_SearchDialog> createState() => _SearchDialogState();
+}
+
+class _SearchDialogState extends ConsumerState<_SearchDialog> {
+  final _searchController = TextEditingController();
+  bool _searchInConversationOnly = true;
+
+  @override
+  void initState() {
+    super.initState();
+    Future<void>(() => widget.controller.clearSearchResults());
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(aimControllerProvider).state;
+    final results = state.searchResults;
+    final isSearching = state.isSearching;
+
+    return AlertDialog(
+      title: const Text('搜索'),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      hintText: '输入关键词搜索...',
+                      prefixIcon: Icon(Icons.search_rounded),
+                      isDense: true,
+                    ),
+                    onSubmitted: (value) => _doSearch(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: isSearching ? null : _doSearch,
+                  icon: isSearching
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.search_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                ChoiceChip(
+                  label: const Text('当前会话'),
+                  selected: _searchInConversationOnly,
+                  onSelected: (v) {
+                    setState(() => _searchInConversationOnly = true);
+                  },
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('全局搜索'),
+                  selected: !_searchInConversationOnly,
+                  onSelected: (v) {
+                    setState(() => _searchInConversationOnly = false);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            if (results != null) _buildResults(results),
+            if (results == null && !isSearching)
+              const Padding(
+                padding: EdgeInsets.only(top: 24),
+                child: Center(
+                  child: Text(
+                    '输入关键词开始搜索',
+                    style: TextStyle(color: AimColors.muted),
+                  ),
+                ),
+              ),
+            if (isSearching)
+              const Padding(
+                padding: EdgeInsets.only(top: 24),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            widget.controller.clearSearchResults();
+            Navigator.of(context).pop();
+          },
+          child: const Text('关闭'),
+        ),
+      ],
+    );
+  }
+
+  void _doSearch() {
+    final query = _searchController.text.trim();
+    if (query.isEmpty) return;
+    if (_searchInConversationOnly) {
+      widget.controller.searchMessagesInConversation(
+        widget.conversationId,
+        query,
+      );
+    } else {
+      widget.controller.performUnifiedSearch(query);
+    }
+  }
+
+  Widget _buildResults(UnifiedSearchResult results) {
+    if (results.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 16),
+        child: Center(
+          child: Text('未找到匹配结果', style: TextStyle(color: AimColors.muted)),
+        ),
+      );
+    }
+
+    return Flexible(
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (results.messages.isNotEmpty) ...[
+              _SectionLabel('消息 (${results.messages.length})'),
+              ...results.messages
+                  .take(6)
+                  .map(
+                    (r) => _SearchResultTile(
+                      title:
+                          '${r.message.senderName} · ${_formatSearchTime(r.message.createdAt)}',
+                      subtitle: r.message.content,
+                      snippet: r.snippet,
+                      onTap: () {
+                        widget.controller.clearSearchResults();
+                        widget.controller.selectConversation(
+                          r.message.conversationId,
+                        );
+                        Navigator.of(context).pop();
+                      },
+                    ),
+                  ),
+            ],
+            if (results.conversations.isNotEmpty) ...[
+              _SectionLabel('会话 (${results.conversations.length})'),
+              ...results.conversations
+                  .take(4)
+                  .map(
+                    (r) => _SearchResultTile(
+                      title: r.conversation.name,
+                      subtitle: r.conversation.lastMessagePreview,
+                      snippet: r.snippet,
+                      onTap: () {
+                        widget.controller.clearSearchResults();
+                        widget.controller.selectConversation(r.conversation.id);
+                        Navigator.of(context).pop();
+                      },
+                    ),
+                  ),
+            ],
+            if (results.users.isNotEmpty) ...[
+              _SectionLabel('用户 (${results.users.length})'),
+              ...results.users
+                  .take(4)
+                  .map(
+                    (r) => _SearchResultTile(
+                      title: r.user.nickname,
+                      subtitle: r.user.email,
+                      snippet: r.snippet,
+                    ),
+                  ),
+            ],
+            if (results.friends.isNotEmpty) ...[
+              _SectionLabel('好友 (${results.friends.length})'),
+              ...results.friends
+                  .take(4)
+                  .map(
+                    (r) => _SearchResultTile(
+                      title: r.friendship.user.nickname,
+                      subtitle: r.friendship.user.email,
+                      snippet: r.snippet,
+                    ),
+                  ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.label);
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 10, bottom: 4),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontWeight: FontWeight.w800,
+          color: AimColors.accent,
+          fontSize: 13,
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchResultTile extends StatelessWidget {
+  const _SearchResultTile({
+    required this.title,
+    required this.subtitle,
+    this.snippet = '',
+    this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final String snippet;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 2),
+                  if (snippet.isNotEmpty) _RichSnippet(snippet),
+                  if (snippet.isEmpty && subtitle.isNotEmpty)
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AimColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (onTap != null)
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: AimColors.muted,
+                size: 18,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 简单渲染 search snippet 中的 `<mark>...</mark>` 高亮。
+class _RichSnippet extends StatelessWidget {
+  const _RichSnippet(this.snippet);
+  final String snippet;
+
+  @override
+  Widget build(BuildContext context) {
+    final spans = <InlineSpan>[];
+    final regex = RegExp(r'<mark>(.*?)</mark>');
+    var lastEnd = 0;
+    for (final match in regex.allMatches(snippet)) {
+      if (match.start > lastEnd) {
+        spans.add(
+          TextSpan(
+            text: snippet.substring(lastEnd, match.start),
+            style: const TextStyle(color: AimColors.muted, fontSize: 12),
+          ),
+        );
+      }
+      spans.add(
+        TextSpan(
+          text: match.group(1) ?? '',
+          style: const TextStyle(
+            color: AimColors.accent,
+            fontWeight: FontWeight.w800,
+            fontSize: 12,
+          ),
+        ),
+      );
+      lastEnd = match.end;
+    }
+    if (lastEnd < snippet.length) {
+      spans.add(
+        TextSpan(
+          text: snippet.substring(lastEnd),
+          style: const TextStyle(color: AimColors.muted, fontSize: 12),
+        ),
+      );
+    }
+    return RichText(
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      text: TextSpan(children: spans),
+    );
+  }
+}
+
+String _formatSearchTime(DateTime dt) {
+  final now = DateTime.now();
+  final diff = now.difference(dt);
+  if (diff.inMinutes < 1) return '刚刚';
+  if (diff.inHours < 1) return '${diff.inMinutes} 分钟前';
+  if (diff.inDays < 1) return '${diff.inHours} 小时前';
+  return '${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
+}
+
+/// 全局搜索弹窗入口（从侧边栏触发，不限定特定会话）。
+Future<void> _showGlobalSearchDialog(
+  BuildContext context,
+  AimController controller,
+) async {
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) {
+      return _GlobalSearchDialog(controller: controller);
+    },
+  );
+}
+
+class _GlobalSearchDialog extends ConsumerStatefulWidget {
+  const _GlobalSearchDialog({required this.controller});
+
+  final AimController controller;
+
+  @override
+  ConsumerState<_GlobalSearchDialog> createState() =>
+      _GlobalSearchDialogState();
+}
+
+class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
+  final _searchController = TextEditingController();
+  @override
+  void initState() {
+    super.initState();
+    Future<void>(() => widget.controller.clearSearchResults());
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(aimControllerProvider).state;
+    final results = state.searchResults;
+    final isSearching = state.isSearching;
+
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.manage_search_rounded, color: AimColors.accent),
+          SizedBox(width: 8),
+          Text('全局搜索'),
+        ],
+      ),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      hintText: '搜索用户、好友、会话、消息...',
+                      prefixIcon: Icon(Icons.search_rounded),
+                      isDense: true,
+                    ),
+                    onSubmitted: (value) => _doSearch(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: isSearching ? null : _doSearch,
+                  icon: isSearching
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.search_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            if (results != null) _buildResults(results),
+            if (results == null && !isSearching)
+              const Padding(
+                padding: EdgeInsets.only(top: 24),
+                child: Center(
+                  child: Text(
+                    '输入关键词搜索全部内容',
+                    style: TextStyle(color: AimColors.muted),
+                  ),
+                ),
+              ),
+            if (isSearching)
+              const Padding(
+                padding: EdgeInsets.only(top: 24),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            widget.controller.clearSearchResults();
+            Navigator.of(context).pop();
+          },
+          child: const Text('关闭'),
+        ),
+      ],
+    );
+  }
+
+  void _doSearch() {
+    final query = _searchController.text.trim();
+    if (query.isEmpty) return;
+    widget.controller.performUnifiedSearch(query);
+  }
+
+  Widget _buildResults(UnifiedSearchResult results) {
+    if (results.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 16),
+        child: Center(
+          child: Text('未找到匹配结果', style: TextStyle(color: AimColors.muted)),
+        ),
+      );
+    }
+
+    return Flexible(
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (results.users.isNotEmpty) ...[
+              _SectionLabel('用户 (${results.users.length})'),
+              ...results.users
+                  .take(4)
+                  .map(
+                    (r) => _SearchResultTile(
+                      title: r.user.nickname,
+                      subtitle: r.user.email,
+                      snippet: r.snippet,
+                    ),
+                  ),
+            ],
+            if (results.friends.isNotEmpty) ...[
+              _SectionLabel('好友 (${results.friends.length})'),
+              ...results.friends
+                  .take(4)
+                  .map(
+                    (r) => _SearchResultTile(
+                      title: r.friendship.user.nickname,
+                      subtitle: r.friendship.user.email,
+                      snippet: r.snippet,
+                      onTap: () {
+                        widget.controller.clearSearchResults();
+                        widget.controller.startDirectConversation(r.friendship);
+                        Navigator.of(context).pop();
+                      },
+                    ),
+                  ),
+            ],
+            if (results.conversations.isNotEmpty) ...[
+              _SectionLabel('会话 (${results.conversations.length})'),
+              ...results.conversations
+                  .take(4)
+                  .map(
+                    (r) => _SearchResultTile(
+                      title: r.conversation.name,
+                      subtitle: r.conversation.lastMessagePreview,
+                      snippet: r.snippet,
+                      onTap: () {
+                        widget.controller.clearSearchResults();
+                        widget.controller.selectConversation(r.conversation.id);
+                        Navigator.of(context).pop();
+                      },
+                    ),
+                  ),
+            ],
+            if (results.messages.isNotEmpty) ...[
+              _SectionLabel('消息 (${results.messages.length})'),
+              ...results.messages
+                  .take(6)
+                  .map(
+                    (r) => _SearchResultTile(
+                      title:
+                          '${r.message.senderName} · ${_formatSearchTime(r.message.createdAt)}',
+                      subtitle: r.message.content,
+                      snippet: r.snippet,
+                      onTap: () {
+                        widget.controller.clearSearchResults();
+                        widget.controller.selectConversation(
+                          r.message.conversationId,
+                        );
+                        Navigator.of(context).pop();
+                      },
+                    ),
+                  ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }

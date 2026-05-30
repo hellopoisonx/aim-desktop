@@ -27,6 +27,12 @@ final aimControllerProvider = ChangeNotifierProvider<AimController>((ref) {
 
 final defaultTokenRefetchMargin = const Duration(seconds: 60);
 
+/// 安全巡检周期：每隔该间隔检查 token 是否即将过期，防止单次 Timer 误期。
+final defaultTokenSafetyInterval = const Duration(seconds: 30);
+
+/// Token 刷新失败后退避重试最大次数。
+const _maxTokenRefreshRetries = 3;
+
 class AimController extends ChangeNotifier {
   AimController({
     required AimRepository repository,
@@ -47,6 +53,8 @@ class AimController extends ChangeNotifier {
   final Random _random = Random.secure();
   StreamSubscription<RealtimeEvent>? _realtimeSubscription;
   Timer? _tokenRefreshTimer;
+  Timer? _tokenSafetyTimer;
+  int _tokenRefreshRetries = 0;
   final Map<int, Timer> _typingClearTimers = {};
   DateTime? _lastTypingSentAt;
   AimState _state = AimState.initial();
@@ -978,27 +986,90 @@ class AimController extends ChangeNotifier {
     _emitNotice('反馈已提交，服务中心将跟进处理');
   }
 
+  /// 公开接口：手动触发 token 刷新（如用户点击"刷新连接"按钮或 UI 触发）。
+  /// 使用内部退避重试逻辑。
   Future<void> refreshToken() async {
-    final session = _state.session;
-    if (session == null) return;
+    await _refreshTokenWithRetry();
+  }
+
+  /// 清除聚合搜索结果。
+  void clearSearchResults() {
+    if (_state.searchResults == null && !_state.isSearching) return;
+    _state = _state.copyWith(
+      searchResults: null,
+      isSearching: false,
+    );
+    notifyListeners();
+  }
+
+  /// 全局聚合搜索：调用 GET /api/search，按用户/好友/会话/消息范围搜索。
+  /// 结果存入 [AimState.searchResults]。
+  Future<void> performUnifiedSearch(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) {
+      clearSearchResults();
+      return;
+    }
+    final currentUser = _state.currentUser;
+    if (currentUser == null) {
+      _emitNotice('请先登录后再搜索');
+      return;
+    }
+    _state = _state.copyWith(isSearching: true);
+    notifyListeners();
     try {
-      final refreshed = await _activeRepository.refreshSession(session);
-      _state = _state.copyWith(session: refreshed, connectionOnline: true);
-      await _tokenStorage.saveSession(
-        accessToken: refreshed.accessToken,
-        refreshToken: refreshed.refreshToken,
-        userId: '${refreshed.user.id}',
-        deviceId: _deviceId,
+      final result = await _activeRepository.search(
+        trimmed,
+        scopes: const ['users', 'friends', 'conversations', 'messages'],
       );
-      _startTokenRefreshTimer(refreshed.expiresAt);
-      _subscribeRealtimeEvents();
-      _emitNotice('连接已刷新');
-    } catch (error) {
-      _state = _state.copyWith(connectionOnline: false);
-      _emitNotice(_readableError(error));
-      if (_isAuthError(error)) {
-        await _forceLogout('登录已过期，请重新登录');
+      _state = _state.copyWith(searchResults: result, isSearching: false);
+      notifyListeners();
+      if (result.isEmpty) {
+        _emitNotice('未找到匹配结果');
+      } else {
+        final count = result.users.length +
+            result.friends.length +
+            result.conversations.length +
+            result.messages.length;
+        _emitNotice('找到 $count 条结果');
       }
+    } catch (error) {
+      _state = _state.copyWith(isSearching: false);
+      notifyListeners();
+      _emitNotice(_readableError(error));
+    }
+  }
+
+  /// 在指定会话内搜索消息。
+  Future<void> searchMessagesInConversation(
+    int conversationId,
+    String query,
+  ) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty || _state.currentUser == null) return;
+    _state = _state.copyWith(isSearching: true);
+    notifyListeners();
+    try {
+      final result = await _activeRepository.search(
+        trimmed,
+        scopes: const ['messages'],
+        conversationId: conversationId,
+      );
+      _state = _state.copyWith(
+        isSearching: false,
+        // 将每页搜索结果作为独立状态存储，供 UI 临时展示
+        searchResults: result,
+      );
+      notifyListeners();
+      if (result.messages.isEmpty) {
+        _emitNotice('该会话中未找到匹配消息');
+      } else {
+        _emitNotice('找到 ${result.messages.length} 条消息');
+      }
+    } catch (error) {
+      _state = _state.copyWith(isSearching: false);
+      notifyListeners();
+      _emitNotice(_readableError(error));
     }
   }
 
@@ -1225,19 +1296,92 @@ class AimController extends ChangeNotifier {
     }
   }
 
+  /// 启动 token 定时刷新（过期间隔前 `_tokenRefetchMargin` 触发）。
+  /// 同时启动一个安全巡检定时器（每 30s），防止单次 Timer 因后台挂起等原因误期。
   void _startTokenRefreshTimer(DateTime expiresAt) {
     _stopTokenRefreshTimer();
-    final delay = expiresAt.difference(DateTime.now()) - _tokenRefetchMargin;
+    _tokenRefreshRetries = 0;
+    final now = DateTime.now();
+    final delay = expiresAt.difference(now) - _tokenRefetchMargin;
+
+    // 即将过期或已过期：立即刷新
     if (delay <= Duration.zero) {
-      unawaited(refreshToken());
+      unawaited(_refreshTokenWithRetry());
       return;
     }
-    _tokenRefreshTimer = Timer(delay, () => unawaited(refreshToken()));
+
+    // 一次性的精确定时（过期前 60s）
+    _tokenRefreshTimer = Timer(delay, () => unawaited(_refreshTokenWithRetry()));
+
+    // 安全巡检：每 30s 检查一次，防止 Timer 被 OS 延迟
+    final safetyInterval = delay > defaultTokenSafetyInterval
+        ? defaultTokenSafetyInterval
+        : delay ~/ 2;
+    if (safetyInterval > Duration.zero) {
+      _tokenSafetyTimer = Timer.periodic(safetyInterval, (_) {
+        final updatedSession = _state.session;
+        if (updatedSession == null) {
+          _stopTokenRefreshTimer();
+          return;
+        }
+        final remaining =
+            updatedSession.expiresAt.difference(DateTime.now()) - _tokenRefetchMargin;
+        if (remaining <= Duration.zero) {
+          _stopTokenRefreshTimer();
+          unawaited(_refreshTokenWithRetry());
+        }
+      });
+    }
   }
 
   void _stopTokenRefreshTimer() {
     _tokenRefreshTimer?.cancel();
     _tokenRefreshTimer = null;
+    _tokenSafetyTimer?.cancel();
+    _tokenSafetyTimer = null;
+  }
+
+  /// Token 刷新（带退避重试）。
+  /// 成功时重置重试计数并更新会话 + 重连 WS。
+  /// 失败时指数退避重试最多 [_maxTokenRefreshRetries] 次。
+  Future<void> _refreshTokenWithRetry() async {
+    final session = _state.session;
+    if (session == null) return;
+    try {
+      await _doRefreshToken();
+      _tokenRefreshRetries = 0;
+    } catch (error) {
+      _tokenRefreshRetries++;
+      if (_tokenRefreshRetries > _maxTokenRefreshRetries) {
+        _emitNotice('Token 刷新失败已达上限，请手动检查连接');
+        _tokenRefreshRetries = 0;
+        if (_isAuthError(error)) {
+          await _forceLogout('登录已过期，请重新登录');
+        }
+        return;
+      }
+      // 退避：1s, 2s, 4s（最多 3 次重试）
+      final backoff = Duration(seconds: 1 << (_tokenRefreshRetries - 1));
+      _emitNotice('Token 刷新失败，${backoff.inSeconds}s 后重试（$_tokenRefreshRetries/$_maxTokenRefreshRetries）');
+      Future<void>.delayed(backoff, () => _refreshTokenWithRetry());
+    }
+  }
+
+  /// 实际执行 token 刷新：调 REST refresh → 保存 → 重连 WS → 重启定时器。
+  Future<void> _doRefreshToken() async {
+    final session = _state.session;
+    if (session == null) return;
+    final refreshed = await _activeRepository.refreshSession(session);
+    _state = _state.copyWith(session: refreshed, connectionOnline: true);
+    await _tokenStorage.saveSession(
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      userId: '${refreshed.user.id}',
+      deviceId: _deviceId,
+    );
+    _startTokenRefreshTimer(refreshed.expiresAt);
+    _subscribeRealtimeEvents();
+    _emitNotice('连接已刷新');
   }
 
   void _subscribeRealtimeEvents() {
@@ -1271,17 +1415,17 @@ class AimController extends ChangeNotifier {
         unawaited(
           Future<void>.delayed(
             Duration(milliseconds: event.reconnectDelayMs),
-            refreshToken,
+            _refreshTokenWithRetry,
           ),
         );
       case RealtimeTokenExpiredEvent():
         _state = _state.copyWith(connectionOnline: false);
         _emitNotice('登录状态已更新，正在重新连接');
-        unawaited(refreshToken());
+        unawaited(_refreshTokenWithRetry());
       case RealtimeConnectionClosedEvent():
         _state = _state.copyWith(connectionOnline: false);
         _emitNotice('实时连接已断开，正在尝试恢复');
-        unawaited(refreshToken());
+        unawaited(_refreshTokenWithRetry());
     }
   }
 
@@ -1651,14 +1795,15 @@ class AimController extends ChangeNotifier {
 
   /// Called when app goes to background (manual §14.4).
   void onAppPaused() {
-    // Pause heartbeat to avoid unnecessary keep-alive
-    _tokenRefreshTimer?.cancel();
+    // 暂停定时器，避免后台不必要的心跳
+    _stopTokenRefreshTimer();
   }
 
   /// Called when app resumes (manual §14.4).
   void onAppResumed() {
     final session = _state.session;
     if (session != null) {
+      // 重新评估 token 是否过期并启动定时器
       _startTokenRefreshTimer(session.expiresAt);
     }
   }

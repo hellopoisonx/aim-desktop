@@ -783,6 +783,8 @@ class AimState {
     this.selectedConversationId,
     this.notice,
     this.noticeSerial = 0,
+    this.searchResults,
+    this.isSearching = false,
   });
 
   factory AimState.initial() {
@@ -820,6 +822,12 @@ class AimState {
   final int? selectedConversationId;
   final String? notice;
   final int noticeSerial;
+
+  /// 全局聚合搜索结果（null = 尚未搜索或已清除）。
+  final UnifiedSearchResult? searchResults;
+
+  /// 是否正在执行聚合搜索。
+  final bool isSearching;
 
   UserProfile? get currentUser => session?.user;
 
@@ -884,6 +892,8 @@ class AimState {
     Object? selectedConversationId = _unset,
     Object? notice = _unset,
     int? noticeSerial,
+    Object? searchResults = _unset,
+    bool? isSearching,
   }) {
     return AimState(
       isAuthenticated: isAuthenticated ?? this.isAuthenticated,
@@ -906,6 +916,10 @@ class AimState {
           : selectedConversationId as int?,
       notice: notice == _unset ? this.notice : notice as String?,
       noticeSerial: noticeSerial ?? this.noticeSerial,
+      searchResults: searchResults == _unset
+          ? this.searchResults
+          : searchResults as UnifiedSearchResult?,
+      isSearching: isSearching ?? this.isSearching,
     );
   }
 }
