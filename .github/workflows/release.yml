@@ -1,4 +1,4 @@
-name: Release Desktop
+name: Release Packages
 
 on:
   push:
@@ -14,6 +14,10 @@ on:
 permissions:
   contents: write
 
+env:
+  APP_NAME: aim_desktop
+  DISPLAY_NAME: AIM Desktop
+
 jobs:
   build:
     name: Build ${{ matrix.platform }}
@@ -22,32 +26,46 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - platform: web
+            os: ubuntu-latest
+            artifact_name: aim_desktop-web
+            artifact_paths: aim_desktop-web.zip
           - platform: linux
             os: ubuntu-latest
             artifact_name: aim_desktop-linux-x64
-            artifact_path: aim_desktop-linux-x64.tar.gz
+            artifact_paths: |
+              aim_desktop-linux-x64.tar.gz
+              aim_desktop-linux-x64.AppImage
           - platform: windows
             os: windows-latest
             artifact_name: aim_desktop-windows-x64
-            artifact_path: aim_desktop-windows-x64.zip
+            artifact_paths: aim_desktop-windows-x64.zip
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Linux build dependencies
-        if: matrix.platform == 'linux'
+      - name: Install Ubuntu build dependencies
+        if: matrix.platform == 'web' || matrix.platform == 'linux'
+        shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            clang \
-            cmake \
-            libgtk-3-dev \
-            libsecret-1-dev \
-            libsqlite3-dev \
-            ninja-build \
-            pkg-config \
-            xz-utils
+          sudo apt-get install -y zip
+
+          if [[ "${{ matrix.platform }}" == "linux" ]]; then
+            sudo apt-get install -y \
+              clang \
+              cmake \
+              desktop-file-utils \
+              libgtk-3-dev \
+              libsecret-1-dev \
+              libsqlite3-dev \
+              ninja-build \
+              pkg-config \
+              squashfs-tools \
+              wget \
+              xz-utils
+          fi
 
       - name: Read Flutter version
         id: flutter-version
@@ -73,6 +91,18 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Enable Web
+        if: matrix.platform == 'web'
+        run: flutter config --enable-web
+
+      - name: Enable Linux desktop
+        if: matrix.platform == 'linux'
+        run: flutter config --enable-linux-desktop
+
+      - name: Enable Windows desktop
+        if: matrix.platform == 'windows'
+        run: flutter config --enable-windows-desktop
+
       - name: Resolve dependencies
         run: flutter pub get
 
@@ -82,13 +112,71 @@ jobs:
       - name: Test
         run: flutter test
 
+      - name: Build Web
+        if: matrix.platform == 'web'
+        run: flutter build web --release
+
+      - name: Package Web
+        if: matrix.platform == 'web'
+        shell: bash
+        run: |
+          (cd build/web && zip -r "${GITHUB_WORKSPACE}/aim_desktop-web.zip" .)
+
       - name: Build Linux
         if: matrix.platform == 'linux'
         run: flutter build linux --release
 
-      - name: Package Linux
+      - name: Package Linux bundle
         if: matrix.platform == 'linux'
-        run: tar -czf "${{ matrix.artifact_path }}" -C build/linux/x64/release/bundle .
+        shell: bash
+        run: tar -czf aim_desktop-linux-x64.tar.gz -C build/linux/x64/release/bundle .
+
+      - name: Package Linux AppImage
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bundle_dir="${GITHUB_WORKSPACE}/build/linux/x64/release/bundle"
+          appdir="${GITHUB_WORKSPACE}/build/appimage/AppDir"
+          appimage_path="${GITHUB_WORKSPACE}/aim_desktop-linux-x64.AppImage"
+
+          rm -rf "${appdir}"
+          mkdir -p "${appdir}"
+          cp -a "${bundle_dir}/." "${appdir}/"
+
+          cp web/icons/Icon-512.png "${appdir}/${APP_NAME}.png"
+
+          cat > "${appdir}/${APP_NAME}.desktop" <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=${DISPLAY_NAME}
+          Exec=${APP_NAME}
+          Icon=${APP_NAME}
+          Categories=Network;Chat;
+          Terminal=false
+          EOF
+
+          cat > "${appdir}/AppRun" <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export LD_LIBRARY_PATH="${HERE}/lib:${LD_LIBRARY_PATH:-}"
+          exec "${HERE}/aim_desktop" "$@"
+          EOF
+
+          chmod +x "${appdir}/AppRun" "${appdir}/${APP_NAME}"
+          desktop-file-validate "${appdir}/${APP_NAME}.desktop"
+
+          appimagetool="${RUNNER_TEMP}/appimagetool-x86_64.AppImage"
+          tool_dir="${RUNNER_TEMP}/appimagetool"
+          wget -q -O "${appimagetool}" "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x "${appimagetool}"
+
+          rm -rf "${tool_dir}"
+          mkdir -p "${tool_dir}"
+          (cd "${tool_dir}" && "${appimagetool}" --appimage-extract >/dev/null)
+          ARCH=x86_64 "${tool_dir}/squashfs-root/AppRun" "${appdir}" "${appimage_path}"
+          chmod +x "${appimage_path}"
 
       - name: Build Windows
         if: matrix.platform == 'windows'
@@ -97,13 +185,13 @@ jobs:
       - name: Package Windows
         if: matrix.platform == 'windows'
         shell: pwsh
-        run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath "${{ matrix.artifact_path }}"
+        run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath aim_desktop-windows-x64.zip -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_path }}
+          path: ${{ matrix.artifact_paths }}
           if-no-files-found: error
 
   publish:

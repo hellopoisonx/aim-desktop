@@ -54,15 +54,16 @@ fvm flutter run --dart-define=AIM_GATEWAY_URL=https://gateway.example.com --dart
 
 ## 自动发布
 
-项目包含 GitHub Actions 工作流 `.github/workflows/release.yml`，用于自动构建并发布桌面端安装包。
+项目包含 GitHub Actions 工作流 `.github/workflows/release.yml`，用于自动构建并发布 Web、Linux、Windows 与 AppImage 包。
 
 触发方式：
 
 - 推送 `v*` tag，例如：`git tag v1.0.0 && git push origin v1.0.0`。
-- 在 GitHub Actions 页面手动运行 `Release Desktop`，可选填写 `release_tag`；未填写时默认使用 `pubspec.yaml` 中的版本生成 `v版本号`。
+- 在 GitHub Actions 页面手动运行 `Release Packages`，可选填写 `release_tag`；未填写时默认使用 `pubspec.yaml` 中的版本生成 `v版本号`。
 
 发布产物：
 
+- `aim_desktop-web.zip`
 - `aim_desktop-linux-x64.tar.gz`
+- `aim_desktop-linux-x64.AppImage`
 - `aim_desktop-windows-x64.zip`
-- `aim_desktop-macos.zip`
