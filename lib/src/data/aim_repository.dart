@@ -105,6 +105,7 @@ abstract class AimRepository {
     required String content,
     required String clientMessageId,
     required DateTime createdAt,
+    List<String> mentions = const [],
   });
 
   Future<SendResult> sendAttachmentMessage({
@@ -149,6 +150,69 @@ abstract class AimRepository {
     int? cursorId,
     int limit = 20,
   }) async => const UnifiedSearchResult();
+
+
+  Future<List<UserBotInfo>> listUserBots() async => const [];
+
+  Future<UserBotInfo> createUserBot({
+    required String nickname,
+    String email = '',
+    String avatarUrl = '',
+  }) => throw UnsupportedError('当前仓库不支持用户侧 Bot 管理');
+
+  Future<UserBotInfo> updateUserBot({
+    required int botUserId,
+    required String nickname,
+    String avatarUrl = '',
+  }) => throw UnsupportedError('当前仓库不支持用户侧 Bot 管理');
+
+  Future<UserBotInfo> enableUserBot(int botUserId) =>
+      throw UnsupportedError('当前仓库不支持用户侧 Bot 管理');
+
+  Future<UserBotInfo> disableUserBot(int botUserId) =>
+      throw UnsupportedError('当前仓库不支持用户侧 Bot 管理');
+
+  Future<void> deleteUserBot(int botUserId) =>
+      throw UnsupportedError('当前仓库不支持用户侧 Bot 管理');
+
+  Future<List<UserBotTokenInfo>> listUserBotTokens(int botUserId) async =>
+      const [];
+
+  Future<UserBotTokenIssueResult> createUserBotToken({
+    required int botUserId,
+    required List<String> actions,
+    String name = '',
+    DateTime? expiresAt,
+  }) => throw UnsupportedError('当前仓库不支持用户侧 Bot 管理');
+
+  Future<UserBotTokenInfo> updateUserBotToken({
+    required int botUserId,
+    required int tokenId,
+    required List<String> actions,
+    String name = '',
+    DateTime? expiresAt,
+  }) => throw UnsupportedError('当前仓库不支持用户侧 Bot 管理');
+
+  Future<UserBotTokenIssueResult> rotateUserBotToken({
+    required int botUserId,
+    required int tokenId,
+  }) => throw UnsupportedError('当前仓库不支持用户侧 Bot 管理');
+
+  Future<void> revokeUserBotToken({
+    required int botUserId,
+    required int tokenId,
+  }) => throw UnsupportedError('当前仓库不支持用户侧 Bot 管理');
+
+  Future<Conversation> addUserBotToConversation({
+    required int botUserId,
+    required int conversationId,
+  }) => throw UnsupportedError('当前仓库不支持用户侧 Bot 管理');
+
+  Future<Conversation> createUserBotDirectConversation(int botUserId) =>
+      throw UnsupportedError('当前仓库不支持用户侧 Bot 管理');
+
+  Future<List<BotActionCatalogItem>> listBotActions() async => const [];
+
 
   Future<Friendship> requestFriend(
     UserProfile currentUser,

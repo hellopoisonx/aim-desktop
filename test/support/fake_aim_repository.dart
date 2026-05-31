@@ -58,6 +58,9 @@ class FakeAimRepository implements AimRepository {
   List<Friendship> _friendRequests = const [];
   List<FriendTag> _friendTags = const [];
   final List<AttachmentItem> _attachments = [];
+  List<UserBotInfo> _ownedBots = const [];
+  Map<int, List<UserBotTokenInfo>> _botTokensByBot = const {};
+  int conversationMembersRequestCount = 0;
 
   @override
   Stream<RealtimeEvent> get realtimeEvents => _eventsController.stream;
@@ -145,6 +148,7 @@ class FakeAimRepository implements AimRepository {
     required String content,
     required String clientMessageId,
     required DateTime createdAt,
+    List<String> mentions = const [],
   }) async {
     final message = ChatMessage(
       id: createdAt.millisecondsSinceEpoch,
@@ -157,6 +161,7 @@ class FakeAimRepository implements AimRepository {
       clientMessageId: clientMessageId,
       status: MessageStatus.sent,
       readBy: [sender.id],
+      mentions: mentions,
     );
     _messages = {
       ..._messages,
@@ -237,14 +242,21 @@ class FakeAimRepository implements AimRepository {
   @override
   Future<FriendTag> renameFriendTag(int tagId, String name) async {
     final existing = _friendTags.firstWhere((item) => item.id == tagId);
-    final renamed = existing.copyWith(name: name.trim(), updatedAt: DateTime.now());
-    _friendTags = _friendTags.map((item) => item.id == tagId ? renamed : item).toList();
+    final renamed = existing.copyWith(
+      name: name.trim(),
+      updatedAt: DateTime.now(),
+    );
+    _friendTags = _friendTags
+        .map((item) => item.id == tagId ? renamed : item)
+        .toList();
     _friends = _friends
-        .map((friendship) => friendship.copyWith(
-              tags: friendship.tags
-                  .map((tag) => tag.id == tagId ? renamed : tag)
-                  .toList(),
-            ))
+        .map(
+          (friendship) => friendship.copyWith(
+            tags: friendship.tags
+                .map((tag) => tag.id == tagId ? renamed : tag)
+                .toList(),
+          ),
+        )
         .toList();
     return renamed;
   }
@@ -253,9 +265,11 @@ class FakeAimRepository implements AimRepository {
   Future<void> deleteFriendTag(int tagId) async {
     _friendTags = _friendTags.where((item) => item.id != tagId).toList();
     _friends = _friends
-        .map((friendship) => friendship.copyWith(
-              tags: friendship.tags.where((tag) => tag.id != tagId).toList(),
-            ))
+        .map(
+          (friendship) => friendship.copyWith(
+            tags: friendship.tags.where((tag) => tag.id != tagId).toList(),
+          ),
+        )
         .toList();
   }
 
@@ -297,38 +311,303 @@ class FakeAimRepository implements AimRepository {
     final value = query.trim().toLowerCase();
     if (value.isEmpty) return const UnifiedSearchResult();
     final friendResults = _friends
-        .where((friendship) =>
-            friendship.user.nickname.toLowerCase().contains(value) ||
-            friendship.user.email.toLowerCase().contains(value) ||
-            friendship.tags.any((tag) => tag.name.toLowerCase().contains(value)))
-        .map((friendship) => SearchFriendResult(
-              friendship: friendship,
-              user: friendship.user,
-              snippet: friendship.user.nickname,
-            ))
+        .where(
+          (friendship) =>
+              friendship.user.nickname.toLowerCase().contains(value) ||
+              friendship.user.email.toLowerCase().contains(value) ||
+              friendship.tags.any(
+                (tag) => tag.name.toLowerCase().contains(value),
+              ),
+        )
+        .map(
+          (friendship) => SearchFriendResult(
+            friendship: friendship,
+            user: friendship.user,
+            snippet: friendship.user.nickname,
+          ),
+        )
         .toList();
     final conversationResults = _conversations
-        .where((conversation) => conversation.name.toLowerCase().contains(value))
-        .map((conversation) => SearchConversationResult(
-              conversation: conversation,
-              snippet: conversation.name,
-            ))
+        .where(
+          (conversation) => conversation.name.toLowerCase().contains(value),
+        )
+        .map(
+          (conversation) => SearchConversationResult(
+            conversation: conversation,
+            snippet: conversation.name,
+          ),
+        )
         .toList();
     final messageResults = _messages.values
         .expand((messages) => messages)
-        .where((message) =>
-            (conversationId == null || message.conversationId == conversationId) &&
-            message.content.toLowerCase().contains(value))
-        .map((message) => SearchMessageResult(
-              message: message,
-              snippet: message.content,
-            ))
+        .where(
+          (message) =>
+              (conversationId == null ||
+                  message.conversationId == conversationId) &&
+              message.content.toLowerCase().contains(value),
+        )
+        .map(
+          (message) =>
+              SearchMessageResult(message: message, snippet: message.content),
+        )
         .toList();
     return UnifiedSearchResult(
       friends: friendResults,
       conversations: conversationResults,
       messages: messageResults.take(limit).toList(),
     );
+  }
+
+  @override
+  Future<List<UserBotInfo>> listUserBots() async {
+    if (_ownedBots.isEmpty) {
+      final now = DateTime.now();
+      _ownedBots = [
+        UserBotInfo(
+          botUserId: 9000000001,
+          ownerUserId: _session?.user.id ?? 1001,
+          email: 'aim-test-bot@example.test',
+          nickname: 'AIM 测试 Bot',
+          avatarUrl: '',
+          status: 1,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      ];
+    }
+    return [..._ownedBots];
+  }
+
+  @override
+  Future<UserBotInfo> createUserBot({
+    required String nickname,
+    String email = '',
+    String avatarUrl = '',
+  }) async {
+    final now = DateTime.now();
+    final bot = UserBotInfo(
+      botUserId: now.microsecondsSinceEpoch,
+      ownerUserId: _session?.user.id ?? 1001,
+      email: email.trim().isEmpty
+          ? '${nickname.trim().toLowerCase()}@example.test'
+          : email.trim(),
+      nickname: nickname.trim(),
+      avatarUrl: avatarUrl,
+      status: 1,
+      createdAt: now,
+      updatedAt: now,
+    );
+    _ownedBots = [bot, ..._ownedBots];
+    return bot;
+  }
+
+  @override
+  Future<UserBotInfo> updateUserBot({
+    required int botUserId,
+    required String nickname,
+    String avatarUrl = '',
+  }) async {
+    late UserBotInfo updated;
+    _ownedBots = _ownedBots.map((bot) {
+      if (bot.botUserId != botUserId) return bot;
+      updated = UserBotInfo(
+        botUserId: bot.botUserId,
+        ownerUserId: bot.ownerUserId,
+        email: bot.email,
+        nickname: nickname.trim(),
+        avatarUrl: avatarUrl,
+        status: bot.status,
+        createdAt: bot.createdAt,
+        updatedAt: DateTime.now(),
+      );
+      return updated;
+    }).toList();
+    return updated;
+  }
+
+  @override
+  Future<UserBotInfo> enableUserBot(int botUserId) async =>
+      _setUserBotStatus(botUserId, 1);
+
+  @override
+  Future<UserBotInfo> disableUserBot(int botUserId) async =>
+      _setUserBotStatus(botUserId, 2);
+
+  UserBotInfo _setUserBotStatus(int botUserId, int status) {
+    late UserBotInfo updated;
+    _ownedBots = _ownedBots.map((bot) {
+      if (bot.botUserId != botUserId) return bot;
+      updated = UserBotInfo(
+        botUserId: bot.botUserId,
+        ownerUserId: bot.ownerUserId,
+        email: bot.email,
+        nickname: bot.nickname,
+        avatarUrl: bot.avatarUrl,
+        status: status,
+        createdAt: bot.createdAt,
+        updatedAt: DateTime.now(),
+      );
+      return updated;
+    }).toList();
+    return updated;
+  }
+
+  @override
+  Future<void> deleteUserBot(int botUserId) async {
+    _ownedBots = _ownedBots.where((bot) => bot.botUserId != botUserId).toList();
+    _botTokensByBot = {..._botTokensByBot}..remove(botUserId);
+  }
+
+  @override
+  Future<List<UserBotTokenInfo>> listUserBotTokens(int botUserId) async {
+    return [...(_botTokensByBot[botUserId] ?? const <UserBotTokenInfo>[])];
+  }
+
+  @override
+  Future<UserBotTokenIssueResult> createUserBotToken({
+    required int botUserId,
+    required List<String> actions,
+    String name = '',
+    DateTime? expiresAt,
+  }) async {
+    final now = DateTime.now();
+    final token = UserBotTokenInfo(
+      tokenId: now.microsecondsSinceEpoch,
+      botUserId: botUserId,
+      name: name.trim(),
+      actions: [...actions],
+      expiresAt: expiresAt,
+      revokedAt: null,
+      createdAt: now,
+    );
+    _botTokensByBot = {
+      ..._botTokensByBot,
+      botUserId: [token, ...(_botTokensByBot[botUserId] ?? const [])],
+    };
+    return UserBotTokenIssueResult(
+      token: token,
+      plaintextToken: 'aim_bot_created_token',
+    );
+  }
+
+  @override
+  Future<UserBotTokenInfo> updateUserBotToken({
+    required int botUserId,
+    required int tokenId,
+    required List<String> actions,
+    String name = '',
+    DateTime? expiresAt,
+  }) async {
+    late UserBotTokenInfo updated;
+    final tokens = (_botTokensByBot[botUserId] ?? const <UserBotTokenInfo>[])
+        .map((token) {
+          if (token.tokenId != tokenId) return token;
+          updated = UserBotTokenInfo(
+            tokenId: token.tokenId,
+            botUserId: token.botUserId,
+            name: name.trim(),
+            actions: [...actions],
+            expiresAt: expiresAt,
+            revokedAt: token.revokedAt,
+            createdAt: token.createdAt,
+          );
+          return updated;
+        })
+        .toList();
+    _botTokensByBot = {..._botTokensByBot, botUserId: tokens};
+    return updated;
+  }
+
+  @override
+  Future<UserBotTokenIssueResult> rotateUserBotToken({
+    required int botUserId,
+    required int tokenId,
+  }) async {
+    final tokens = _botTokensByBot[botUserId] ?? const <UserBotTokenInfo>[];
+    final existing = tokens.firstWhere((token) => token.tokenId == tokenId);
+    return UserBotTokenIssueResult(
+      token: existing,
+      plaintextToken: 'aim_bot_rotated_token',
+    );
+  }
+
+  @override
+  Future<void> revokeUserBotToken({
+    required int botUserId,
+    required int tokenId,
+  }) async {
+    _botTokensByBot = {
+      ..._botTokensByBot,
+      botUserId: (_botTokensByBot[botUserId] ?? const <UserBotTokenInfo>[])
+          .where((token) => token.tokenId != tokenId)
+          .toList(),
+    };
+  }
+
+  @override
+  Future<Conversation> addUserBotToConversation({
+    required int botUserId,
+    required int conversationId,
+  }) async {
+    late Conversation updated;
+    _conversations = _conversations.map((conversation) {
+      if (conversation.id != conversationId) return conversation;
+      updated = conversation.copyWith(
+        memberIds: <int>{...conversation.memberIds, botUserId}.toList(),
+        updatedAt: DateTime.now(),
+        lastMessagePreview: 'Bot 已加入会话',
+      );
+      return updated;
+    }).toList();
+    return updated;
+  }
+
+  @override
+  Future<Conversation> createUserBotDirectConversation(int botUserId) async {
+    final now = DateTime.now();
+    final bot = _ownedBots.cast<UserBotInfo?>().firstWhere(
+      (item) => item?.botUserId == botUserId,
+      orElse: () => null,
+    );
+    final conversation = Conversation(
+      id: now.microsecondsSinceEpoch,
+      type: ConversationType.direct,
+      name: bot?.nickname ?? 'Bot 会话',
+      avatarText: 'BOT',
+      memberIds: [_session?.user.id ?? 1001, botUserId],
+      createdAt: now,
+      updatedAt: now,
+      lastMessagePreview: '可以开始聊天了',
+    );
+    _conversations = [conversation, ..._conversations];
+    _messages = {..._messages, conversation.id: const []};
+    return conversation;
+  }
+
+  @override
+  Future<List<BotActionCatalogItem>> listBotActions() async {
+    return const [
+      BotActionCatalogItem(
+        id: 1,
+        action: 'bot.self.read',
+        description: '查看 Bot 身份',
+      ),
+      BotActionCatalogItem(
+        id: 2,
+        action: 'bot.conversation.list',
+        description: '查看 Bot 会话',
+      ),
+      BotActionCatalogItem(
+        id: 3,
+        action: 'bot.conversation.history',
+        description: '查看历史消息',
+      ),
+      BotActionCatalogItem(
+        id: 4,
+        action: 'bot.message.send',
+        description: '发送消息',
+      ),
+    ];
   }
 
   @override
@@ -449,6 +728,7 @@ class FakeAimRepository implements AimRepository {
 
   @override
   Future<List<UserProfile>> getConversationMembers(int conversationId) async {
+    conversationMembersRequestCount++;
     final conversation = _conversations.firstWhere(
       (item) => item.id == conversationId,
     );
@@ -625,6 +905,17 @@ class FakeAimRepository implements AimRepository {
     if (_session?.user.id == userId) return _session!.user;
     for (final friendship in [..._friends, ..._friendRequests]) {
       if (friendship.user.id == userId) return friendship.user;
+    }
+    for (final bot in _ownedBots) {
+      if (bot.botUserId == userId) {
+        return UserProfile(
+          id: bot.botUserId,
+          email: bot.email,
+          nickname: bot.nickname,
+          avatarUrl: bot.avatarUrl,
+          status: PresenceStatus.offline,
+        );
+      }
     }
     return UserProfile(
       id: userId,

@@ -22,7 +22,7 @@
 ## 开发手册
 
 - 客户端实现指南：`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/docs/client_implement_instruction.md`
-- REST OpenAPI：`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/docs/api/gateway-openapi.yaml`
+- REST OpenAPI **唯一的API事实来源**：`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/docs/api/gateway-openapi.yaml`
 - WebSocket 协议：`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/docs/ws.md`
 - WS Proto：`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/shared/proto/ws/ws.proto`
 
@@ -41,6 +41,16 @@ fvm flutter run --dart-define=AIM_GATEWAY_URL=https://gateway.example.com --dart
 ```
 
 也可以在本地 `.env` 中配置 `AIM_GATEWAY_URL` / `AIM_ENV_NAME`（不要提交真实密钥或个人配置）。
+
+## Bot 管理中心
+
+登录后从侧边菜单进入 **Bot 管理中心**，用于管理当前用户拥有的个人 Bot：
+
+- 创建、查询、启用/停用个人 Bot。
+- 为 Bot 签发、轮换、撤销连接密钥，并配置可授权 action。
+- 将 Bot 加入会话或创建与 Bot 的直聊会话。
+
+桌面端不再内置 Bot 侧执行能力：不连接 `/api/bot/v1/*`，不注册/处理 Webhook，也不作为 Bot 运行端监听或自动响应事件。
 
 ## 自动发布
 

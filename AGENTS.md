@@ -22,6 +22,7 @@ fvm flutter test
 
 ## 开发约定
 
+- **唯一的API事实来源**：`https://raw.githubusercontent.com/hellopoisonx/aim/refs/heads/main/docs/api/gateway-openapi.yaml`
 - 遵循 `analysis_options.yaml` 中的 Flutter lint。
 - UI 优先沿用 Material 3 与现有组件；状态管理沿用 Riverpod；网络访问沿用 Dio。
 - 客户端只通过 Gateway 的 REST/WS 接口通信；接口细节优先查 `README.md` 的“开发手册”链接。

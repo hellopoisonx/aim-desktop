@@ -62,6 +62,7 @@ class SecureTokenStorage implements TokenStorage {
     }
   }
 
+
   @override
   Future<void> saveSession({
     required String accessToken,
@@ -78,6 +79,7 @@ class SecureTokenStorage implements TokenStorage {
       // No-op in environments without secure storage plugin
     }
   }
+
 
   @override
   Future<void> clearSession() async {

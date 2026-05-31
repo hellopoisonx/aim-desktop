@@ -434,10 +434,7 @@ class GatewayApiClient {
       return UserProfile(
         id: _asInt(item['user_id']),
         email: _asString(item['email']),
-        nickname: _asString(
-          item['display_name'],
-          fallback: _asString(item['name'], fallback: _asString(item['email'])),
-        ),
+        nickname: _asString(item['name'], fallback: _asString(item['email'])),
         avatarUrl: _asString(item['avatar']),
         status: PresenceStatus.offline,
       );
@@ -593,6 +590,163 @@ class GatewayApiClient {
       nextCursorId: _asInt(body['next_cursor_id']),
       hasMore: body['has_more'] == true,
     );
+  }
+
+  Future<List<UserBotInfo>> listUserBots() async {
+    final response = await _dio.get<Map<String, dynamic>>('/api/user/bots');
+    return _list(
+      _body(response.data)['bots'],
+    ).map((item) => _userBotInfoFromJson(_asMap(item))).toList();
+  }
+
+  Future<UserBotInfo> createUserBot({
+    required String nickname,
+    String email = '',
+    String avatarUrl = '',
+  }) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/api/user/bots',
+      data: {
+        'nickname': nickname.trim(),
+        if (email.trim().isNotEmpty) 'email': email.trim(),
+        if (avatarUrl.trim().isNotEmpty) 'avatar': avatarUrl.trim(),
+      },
+    );
+    return _userBotInfoFromJson(_asMap(_body(response.data)['bot']));
+  }
+
+  Future<UserBotInfo> updateUserBot({
+    required int botUserId,
+    required String nickname,
+    String avatarUrl = '',
+  }) async {
+    final response = await _dio.put<Map<String, dynamic>>(
+      '/api/user/bots/$botUserId',
+      data: {
+        'nickname': nickname.trim(),
+        if (avatarUrl.trim().isNotEmpty) 'avatar': avatarUrl.trim(),
+      },
+    );
+    return _userBotInfoFromJson(_asMap(_body(response.data)['bot']));
+  }
+
+  Future<UserBotInfo> enableUserBot(int botUserId) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/api/user/bots/$botUserId/enable',
+    );
+    return _userBotInfoFromJson(_asMap(_body(response.data)['bot']));
+  }
+
+  Future<UserBotInfo> disableUserBot(int botUserId) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/api/user/bots/$botUserId/disable',
+    );
+    return _userBotInfoFromJson(_asMap(_body(response.data)['bot']));
+  }
+
+  Future<void> deleteUserBot(int botUserId) async {
+    final response = await _dio.delete<Map<String, dynamic>>(
+      '/api/user/bots/$botUserId',
+    );
+    _body(response.data);
+  }
+
+  Future<List<UserBotTokenInfo>> listUserBotTokens(int botUserId) async {
+    final response = await _dio.get<Map<String, dynamic>>(
+      '/api/user/bots/$botUserId/tokens',
+    );
+    return _list(
+      _body(response.data)['tokens'],
+    ).map((item) => _userBotTokenFromJson(_asMap(item))).toList();
+  }
+
+  Future<UserBotTokenIssueResult> createUserBotToken({
+    required int botUserId,
+    required List<String> actions,
+    String name = '',
+    DateTime? expiresAt,
+  }) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/api/user/bots/$botUserId/tokens',
+      data: {
+        'actions': actions,
+        if (name.trim().isNotEmpty) 'name': name.trim(),
+        if (expiresAt != null) 'expires_at': expiresAt.millisecondsSinceEpoch,
+      },
+    );
+    final body = _body(response.data);
+    return UserBotTokenIssueResult(
+      token: _userBotTokenFromJson(_asMap(body['token'])),
+      plaintextToken: _asString(body['plaintext_token']),
+    );
+  }
+
+  Future<UserBotTokenInfo> updateUserBotToken({
+    required int botUserId,
+    required int tokenId,
+    required List<String> actions,
+    String name = '',
+    DateTime? expiresAt,
+  }) async {
+    final response = await _dio.put<Map<String, dynamic>>(
+      '/api/user/bots/$botUserId/tokens/$tokenId',
+      data: {
+        'actions': actions,
+        if (name.trim().isNotEmpty) 'name': name.trim(),
+        if (expiresAt != null) 'expires_at': expiresAt.millisecondsSinceEpoch,
+      },
+    );
+    return _userBotTokenFromJson(_asMap(_body(response.data)['token']));
+  }
+
+  Future<UserBotTokenIssueResult> rotateUserBotToken({
+    required int botUserId,
+    required int tokenId,
+  }) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/api/user/bots/$botUserId/tokens/$tokenId/rotate',
+    );
+    final body = _body(response.data);
+    return UserBotTokenIssueResult(
+      token: _userBotTokenFromJson(_asMap(body['token'])),
+      plaintextToken: _asString(body['plaintext_token']),
+    );
+  }
+
+  Future<void> revokeUserBotToken({
+    required int botUserId,
+    required int tokenId,
+  }) async {
+    final response = await _dio.delete<Map<String, dynamic>>(
+      '/api/user/bots/$botUserId/tokens/$tokenId',
+    );
+    _body(response.data);
+  }
+
+  Future<Conversation> addUserBotToConversation({
+    required int botUserId,
+    required int conversationId,
+  }) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/api/user/bots/$botUserId/conversations/$conversationId',
+    );
+    return _conversationFromJson(_body(response.data));
+  }
+
+  Future<Conversation> createUserBotDirectConversation(int botUserId) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/api/user/bots/$botUserId/direct-conversation',
+    );
+    return _conversationFromJson(_body(response.data));
+  }
+
+  Future<List<BotActionCatalogItem>> listBotActions() async {
+    final response = await _dio.get<Map<String, dynamic>>(
+      '/api/user/bot-actions',
+    );
+    return _list(
+      _body(response.data)['actions'],
+    ).map((item) => _botActionCatalogItemFromJson(_asMap(item))).toList();
   }
 
   Future<AttachmentUploadTicket> createAttachmentUploadTicket({
@@ -966,9 +1120,9 @@ Friendship _friendshipFromJson(
     createdAt: _dateFromMs(json['created_at']),
     updatedAt: _dateFromMs(json['updated_at']),
     incoming: friendId == currentUser.id && status == FriendStatus.pending,
-    tags: _list(json['tags'])
-        .map((item) => _friendTagFromJson(_asMap(item)))
-        .toList(),
+    tags: _list(
+      json['tags'],
+    ).map((item) => _friendTagFromJson(_asMap(item))).toList(),
   );
 }
 
@@ -1070,6 +1224,39 @@ AttachmentItem _attachmentFromJson(Map<String, dynamic> json) {
   );
 }
 
+UserBotInfo _userBotInfoFromJson(Map<String, dynamic> json) {
+  return UserBotInfo(
+    botUserId: _asInt(json['bot_user_id']),
+    ownerUserId: _asInt(json['owner_user_id']),
+    email: _asString(json['email']),
+    nickname: _asString(json['nickname'], fallback: _asString(json['email'])),
+    avatarUrl: _asString(json['avatar']),
+    status: _asInt(json['status']),
+    createdAt: _dateFromMs(json['created_at']),
+    updatedAt: _dateFromMs(json['updated_at']),
+  );
+}
+
+UserBotTokenInfo _userBotTokenFromJson(Map<String, dynamic> json) {
+  return UserBotTokenInfo(
+    tokenId: _asInt(json['token_id']),
+    botUserId: _asInt(json['bot_user_id']),
+    name: _asString(json['name']),
+    actions: _list(json['actions']).map((item) => '$item').toList(),
+    expiresAt: _nullableDateFromMs(json['expires_at']),
+    revokedAt: _nullableDateFromMs(json['revoked_at']),
+    createdAt: _dateFromMs(json['created_at']),
+  );
+}
+
+BotActionCatalogItem _botActionCatalogItemFromJson(Map<String, dynamic> json) {
+  return BotActionCatalogItem(
+    id: _asInt(json['id']),
+    action: _asString(json['action']),
+    description: _asString(json['description']),
+  );
+}
+
 ConversationType _conversationType(String value) {
   return value == 'group' ? ConversationType.group : ConversationType.direct;
 }
@@ -1145,6 +1332,12 @@ int? _nullableInt(dynamic value) {
 DateTime _dateFromMs(dynamic value, {DateTime? fallback}) {
   final ms = _asInt(value);
   if (ms <= 0) return fallback ?? DateTime.now();
+  return DateTime.fromMillisecondsSinceEpoch(ms);
+}
+
+DateTime? _nullableDateFromMs(dynamic value) {
+  final ms = _asInt(value);
+  if (ms <= 0) return null;
   return DateTime.fromMillisecondsSinceEpoch(ms);
 }
 

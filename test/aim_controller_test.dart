@@ -260,4 +260,54 @@ void main() {
     expect(conv.lastMessagePreview, '新成员加入群聊');
     await repository.close();
   });
+
+  test('Bot 管理中心保留用户侧 Bot 与连接密钥管理', () async {
+    final repository = FakeAimRepository();
+    final storage = MemoryTokenStorage();
+    final controller = AimController(
+      repository: repository,
+      tokenStorage: storage,
+    );
+    addTearDown(controller.dispose);
+    await controller.login(email: 'user@example.test', password: 'secret1234');
+
+    await controller.loadUserBots();
+    expect(controller.state.botCenter.ownedBots, isNotEmpty);
+    final ownedBot = controller.state.botCenter.ownedBots.first;
+
+    await controller.createUserBotToken(
+      botUserId: ownedBot.botUserId,
+      actions: const ['bot.self.read', 'bot.message.send'],
+      name: '测试密钥',
+    );
+    expect(controller.state.botCenter.plaintextToken, 'aim_bot_created_token');
+    expect(
+      controller.state.botCenter.tokensFor(ownedBot.botUserId),
+      isNotEmpty,
+    );
+
+    await controller.rotateUserBotToken(
+      botUserId: ownedBot.botUserId,
+      tokenId: controller.state.botCenter
+          .tokensFor(ownedBot.botUserId)
+          .first
+          .tokenId,
+    );
+    expect(controller.state.botCenter.plaintextToken, 'aim_bot_rotated_token');
+
+    final group = controller.state.conversations.firstWhere(
+      (conversation) => conversation.type == ConversationType.group,
+    );
+    await controller.addUserBotToConversation(
+      botUserId: ownedBot.botUserId,
+      conversationId: group.id,
+    );
+    final updatedGroup = controller.state.conversations.firstWhere(
+      (conversation) => conversation.id == group.id,
+    );
+    expect(updatedGroup.memberIds, contains(ownedBot.botUserId));
+    expect(controller.state.notice, 'Bot 已加入会话');
+
+    await repository.close();
+  });
 }

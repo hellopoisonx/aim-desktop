@@ -8,6 +8,7 @@ enum AppSection {
   friends,
   friendRequests,
   groups,
+  bots,
   attachments,
   services,
   settings,
@@ -748,6 +749,164 @@ class UnifiedSearchResult {
       messages.isEmpty;
 }
 
+class UserBotInfo {
+  const UserBotInfo({
+    required this.botUserId,
+    required this.ownerUserId,
+    required this.email,
+    required this.nickname,
+    required this.avatarUrl,
+    required this.status,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final int botUserId;
+  final int ownerUserId;
+  final String email;
+  final String nickname;
+  final String avatarUrl;
+  final int status;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  bool get isEnabled => status == 1;
+
+  String get statusLabel => isEnabled ? '启用' : '停用';
+
+  String get initials {
+    final trimmed = nickname.trim();
+    if (trimmed.isEmpty) return 'BOT';
+    return String.fromCharCodes(trimmed.runes.take(3)).toUpperCase();
+  }
+}
+
+class UserBotTokenInfo {
+  const UserBotTokenInfo({
+    required this.tokenId,
+    required this.botUserId,
+    required this.name,
+    required this.actions,
+    required this.expiresAt,
+    required this.revokedAt,
+    required this.createdAt,
+  });
+
+  final int tokenId;
+  final int botUserId;
+  final String name;
+  final List<String> actions;
+  final DateTime? expiresAt;
+  final DateTime? revokedAt;
+  final DateTime createdAt;
+
+  bool get isRevoked => revokedAt != null;
+  bool get neverExpires => expiresAt == null;
+}
+
+class UserBotTokenIssueResult {
+  const UserBotTokenIssueResult({
+    required this.token,
+    required this.plaintextToken,
+  });
+
+  final UserBotTokenInfo token;
+
+  /// 明文连接密钥仅在创建或轮换后返回一次。
+  final String plaintextToken;
+}
+
+class BotActionCatalogItem {
+  const BotActionCatalogItem({
+    required this.id,
+    required this.action,
+    required this.description,
+  });
+
+  final int id;
+  final String action;
+  final String description;
+}
+
+class BotCenterState {
+  const BotCenterState({
+    this.isLoading = false,
+    this.ownedBots = const [],
+    this.selectedOwnedBotId,
+    this.botTokensByBot = const {},
+    this.availableActions = const [],
+    this.plaintextToken = '',
+  });
+
+  final bool isLoading;
+  final List<UserBotInfo> ownedBots;
+  final int? selectedOwnedBotId;
+  final Map<int, List<UserBotTokenInfo>> botTokensByBot;
+  final List<BotActionCatalogItem> availableActions;
+  final String plaintextToken;
+
+  UserBotInfo? get selectedOwnedBot {
+    final selectedId = selectedOwnedBotId;
+    if (selectedId == null) return null;
+    for (final bot in ownedBots) {
+      if (bot.botUserId == selectedId) return bot;
+    }
+    return null;
+  }
+
+  List<BotActionCatalogItem> get tokenActionOptions {
+    if (availableActions.isEmpty) {
+      return const [
+        BotActionCatalogItem(
+          id: 0,
+          action: 'bot.self.read',
+          description: '查看 Bot 身份',
+        ),
+        BotActionCatalogItem(
+          id: 0,
+          action: 'bot.conversation.list',
+          description: '查看 Bot 会话',
+        ),
+        BotActionCatalogItem(
+          id: 0,
+          action: 'bot.conversation.history',
+          description: '查看会话历史',
+        ),
+        BotActionCatalogItem(
+          id: 0,
+          action: 'bot.message.send',
+          description: '发送消息',
+        ),
+      ];
+    }
+    return availableActions;
+  }
+
+  List<UserBotTokenInfo> tokensFor(int botUserId) {
+    return botTokensByBot[botUserId] ?? const [];
+  }
+
+  BotCenterState copyWith({
+    bool? isLoading,
+    List<UserBotInfo>? ownedBots,
+    Object? selectedOwnedBotId = _unset,
+    Map<int, List<UserBotTokenInfo>>? botTokensByBot,
+    List<BotActionCatalogItem>? availableActions,
+    String? plaintextToken,
+  }) {
+    return BotCenterState(
+      isLoading: isLoading ?? this.isLoading,
+      ownedBots: ownedBots ?? this.ownedBots,
+      selectedOwnedBotId: selectedOwnedBotId == _unset
+          ? this.selectedOwnedBotId
+          : selectedOwnedBotId as int?,
+      botTokensByBot: botTokensByBot ?? this.botTokensByBot,
+      availableActions: availableActions ?? this.availableActions,
+      plaintextToken: plaintextToken ?? this.plaintextToken,
+    );
+  }
+}
+
 class ServiceOrder {
   const ServiceOrder({
     required this.id,
@@ -779,6 +938,8 @@ class AimState {
     required this.attachments,
     required this.orders,
     required this.notifications,
+    required this.conversationMembersById,
+    required this.botCenter,
     this.session,
     this.selectedConversationId,
     this.notice,
@@ -802,6 +963,8 @@ class AimState {
       attachments: [],
       orders: [],
       notifications: [],
+      conversationMembersById: {},
+      botCenter: BotCenterState(),
     );
   }
 
@@ -818,6 +981,8 @@ class AimState {
   final List<AttachmentItem> attachments;
   final List<ServiceOrder> orders;
   final List<AppNotification> notifications;
+  final Map<int, List<UserProfile>> conversationMembersById;
+  final BotCenterState botCenter;
   final AuthSession? session;
   final int? selectedConversationId;
   final String? notice;
@@ -844,6 +1009,19 @@ class AimState {
     return messagesByConversation[conversationId] ?? const [];
   }
 
+  List<UserProfile> membersForConversation(int conversationId) {
+    return conversationMembersById[conversationId] ?? const [];
+  }
+
+  UserProfile? memberProfileById(int userId) {
+    for (final members in conversationMembersById.values) {
+      for (final member in members) {
+        if (member.id == userId) return member;
+      }
+    }
+    return null;
+  }
+
   List<Conversation> get filteredConversations {
     final keyword = searchQuery.trim().toLowerCase();
     final sorted = [...conversations]
@@ -867,7 +1045,9 @@ class AimState {
       final user = friendship.user;
       return user.nickname.toLowerCase().contains(keyword) ||
           user.email.toLowerCase().contains(keyword) ||
-          friendship.tags.any((tag) => tag.name.toLowerCase().contains(keyword));
+          friendship.tags.any(
+            (tag) => tag.name.toLowerCase().contains(keyword),
+          );
     }).toList();
   }
 
@@ -888,6 +1068,8 @@ class AimState {
     List<AttachmentItem>? attachments,
     List<ServiceOrder>? orders,
     List<AppNotification>? notifications,
+    Map<int, List<UserProfile>>? conversationMembersById,
+    BotCenterState? botCenter,
     AuthSession? session,
     Object? selectedConversationId = _unset,
     Object? notice = _unset,
@@ -910,6 +1092,9 @@ class AimState {
       attachments: attachments ?? this.attachments,
       orders: orders ?? this.orders,
       notifications: notifications ?? this.notifications,
+      conversationMembersById:
+          conversationMembersById ?? this.conversationMembersById,
+      botCenter: botCenter ?? this.botCenter,
       session: session ?? this.session,
       selectedConversationId: selectedConversationId == _unset
           ? this.selectedConversationId

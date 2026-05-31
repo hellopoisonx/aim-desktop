@@ -245,9 +245,9 @@ class GatewayAimRepository implements AimRepository {
     final requests = await _apiClient
         .listFriendApplications(user)
         .catchError((_) => <Friendship>[]);
-    final friendTags = await _apiClient
-        .listFriendTags()
-        .catchError((_) => <FriendTag>[]);
+    final friendTags = await _apiClient.listFriendTags().catchError(
+      (_) => <FriendTag>[],
+    );
     final presences = await _apiClient.getFriendsPresence().catchError(
       (_) => <PresenceItem>[],
     );
@@ -478,11 +478,13 @@ class GatewayAimRepository implements AimRepository {
     required String content,
     required String clientMessageId,
     required DateTime createdAt,
+    List<String> mentions = const [],
   }) async {
     final ack = await _realtimeClient.sendTextMessage(
       conversationId: conversationId,
       content: content,
       clientMessageId: clientMessageId,
+      mentions: mentions,
     );
     final msg = ChatMessage(
       id: ack.messageId == 0 ? createdAt.millisecondsSinceEpoch : ack.messageId,
@@ -497,6 +499,7 @@ class GatewayAimRepository implements AimRepository {
           ? MessageStatus.sent
           : MessageStatus.failed,
       readBy: [sender.id],
+      mentions: mentions,
     );
     await _upsertMessage(msg);
     return SendResult(
@@ -633,6 +636,134 @@ class GatewayAimRepository implements AimRepository {
       limit: limit,
     );
   }
+
+
+  @override
+  Future<List<UserBotInfo>> listUserBots() {
+    return _apiClient.listUserBots();
+  }
+
+  @override
+  Future<UserBotInfo> createUserBot({
+    required String nickname,
+    String email = '',
+    String avatarUrl = '',
+  }) {
+    return _apiClient.createUserBot(
+      nickname: nickname,
+      email: email,
+      avatarUrl: avatarUrl,
+    );
+  }
+
+  @override
+  Future<UserBotInfo> updateUserBot({
+    required int botUserId,
+    required String nickname,
+    String avatarUrl = '',
+  }) {
+    return _apiClient.updateUserBot(
+      botUserId: botUserId,
+      nickname: nickname,
+      avatarUrl: avatarUrl,
+    );
+  }
+
+  @override
+  Future<UserBotInfo> enableUserBot(int botUserId) {
+    return _apiClient.enableUserBot(botUserId);
+  }
+
+  @override
+  Future<UserBotInfo> disableUserBot(int botUserId) {
+    return _apiClient.disableUserBot(botUserId);
+  }
+
+  @override
+  Future<void> deleteUserBot(int botUserId) {
+    return _apiClient.deleteUserBot(botUserId);
+  }
+
+  @override
+  Future<List<UserBotTokenInfo>> listUserBotTokens(int botUserId) {
+    return _apiClient.listUserBotTokens(botUserId);
+  }
+
+  @override
+  Future<UserBotTokenIssueResult> createUserBotToken({
+    required int botUserId,
+    required List<String> actions,
+    String name = '',
+    DateTime? expiresAt,
+  }) {
+    return _apiClient.createUserBotToken(
+      botUserId: botUserId,
+      actions: actions,
+      name: name,
+      expiresAt: expiresAt,
+    );
+  }
+
+  @override
+  Future<UserBotTokenInfo> updateUserBotToken({
+    required int botUserId,
+    required int tokenId,
+    required List<String> actions,
+    String name = '',
+    DateTime? expiresAt,
+  }) {
+    return _apiClient.updateUserBotToken(
+      botUserId: botUserId,
+      tokenId: tokenId,
+      actions: actions,
+      name: name,
+      expiresAt: expiresAt,
+    );
+  }
+
+  @override
+  Future<UserBotTokenIssueResult> rotateUserBotToken({
+    required int botUserId,
+    required int tokenId,
+  }) {
+    return _apiClient.rotateUserBotToken(
+      botUserId: botUserId,
+      tokenId: tokenId,
+    );
+  }
+
+  @override
+  Future<void> revokeUserBotToken({
+    required int botUserId,
+    required int tokenId,
+  }) {
+    return _apiClient.revokeUserBotToken(
+      botUserId: botUserId,
+      tokenId: tokenId,
+    );
+  }
+
+  @override
+  Future<Conversation> addUserBotToConversation({
+    required int botUserId,
+    required int conversationId,
+  }) {
+    return _apiClient.addUserBotToConversation(
+      botUserId: botUserId,
+      conversationId: conversationId,
+    );
+  }
+
+  @override
+  Future<Conversation> createUserBotDirectConversation(int botUserId) {
+    return _apiClient.createUserBotDirectConversation(botUserId);
+  }
+
+  @override
+  Future<List<BotActionCatalogItem>> listBotActions() {
+    return _apiClient.listBotActions();
+  }
+
 
   @override
   Future<Friendship> requestFriend(

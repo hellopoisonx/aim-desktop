@@ -11,6 +11,7 @@ import '../domain/models.dart';
 import 'responsive.dart';
 import 'theme.dart';
 import 'widgets/shared_widgets.dart';
+import 'widgets/mention_text_field.dart';
 
 class WorkspacePage extends ConsumerStatefulWidget {
   const WorkspacePage({super.key});
@@ -134,6 +135,10 @@ class _TabletLayout extends StatelessWidget {
                 label: Text('群组'),
               ),
               NavigationRailDestination(
+                icon: Icon(Icons.smart_toy_rounded),
+                label: Text('Bot'),
+              ),
+              NavigationRailDestination(
                 icon: Icon(Icons.person_rounded),
                 label: Text('我的'),
               ),
@@ -161,8 +166,9 @@ class _TabletLayout extends StatelessWidget {
       AppSection.chats => 0,
       AppSection.friends || AppSection.friendRequests => 1,
       AppSection.groups => 2,
-      AppSection.profile => 3,
-      _ => 4,
+      AppSection.bots => 3,
+      AppSection.profile => 4,
+      _ => 5,
     };
   }
 
@@ -170,8 +176,9 @@ class _TabletLayout extends StatelessWidget {
     return switch (index) {
       1 => AppSection.friends,
       2 => AppSection.groups,
-      3 => AppSection.profile,
-      4 => AppSection.settings,
+      3 => AppSection.bots,
+      4 => AppSection.profile,
+      5 => AppSection.settings,
       _ => AppSection.chats,
     };
   }
@@ -555,7 +562,7 @@ class _ChatPane extends StatefulWidget {
 }
 
 class _ChatPaneState extends State<_ChatPane> {
-  final _messageController = TextEditingController();
+  final _messageController = MentionTextEditingController();
   late final ScrollController _scrollController;
   final Map<int, double> _scrollPositions = {};
   int _lastMessageCount = 0;
@@ -768,6 +775,7 @@ class _ChatPaneState extends State<_ChatPane> {
             _Composer(
               controller: widget.controller,
               textController: _messageController,
+              mentionUsers: mentionCandidatesFromState(widget.state),
             ),
           ],
         ),
@@ -882,12 +890,8 @@ class _ChatHeader extends StatelessWidget {
           ),
           IconButton(
             tooltip: '会话信息',
-            onPressed: () => _showConversationInfoDialog(
-              context,
-              controller,
-              state,
-              conversation,
-            ),
+            onPressed: () =>
+                _openConversationInfoDialog(context, controller, conversation),
             icon: const Icon(Icons.info_outline_rounded),
           ),
           PopupMenuButton<String>(
@@ -1650,10 +1654,15 @@ class _MessageStatus extends StatelessWidget {
 }
 
 class _Composer extends StatelessWidget {
-  const _Composer({required this.controller, required this.textController});
+  const _Composer({
+    required this.controller,
+    required this.textController,
+    required this.mentionUsers,
+  });
 
   final AimController controller;
-  final TextEditingController textController;
+  final MentionTextEditingController textController;
+  final List<UserProfile> mentionUsers;
 
   @override
   Widget build(BuildContext context) {
@@ -1706,23 +1715,21 @@ class _Composer extends StatelessWidget {
                 ),
               ],
               Expanded(
-                child: TextField(
+                child: MentionTextField(
                   key: const Key('message_input'),
                   controller: textController,
+                  usersProvider: () => mentionUsers,
                   minLines: 1,
                   maxLines: 5,
                   onChanged: (_) => controller.sendTypingEvent(),
                   onSubmitted: (_) => _send(),
+                  isDense: compact,
+                  contentPadding: compact
+                      ? const EdgeInsets.symmetric(horizontal: 12, vertical: 10)
+                      : null,
                   decoration: InputDecoration(
                     hintText: '输入消息...',
                     prefixIcon: compact ? null : const Icon(Icons.edit_rounded),
-                    isDense: compact,
-                    contentPadding: compact
-                        ? const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
-                          )
-                        : null,
                   ),
                 ),
               ),
@@ -1761,8 +1768,9 @@ class _Composer extends StatelessWidget {
 
   void _send() {
     final text = textController.text;
+    final mentions = textController.mentionIds;
     textController.clear();
-    controller.sendTextMessage(text);
+    controller.sendTextMessage(text, mentions: mentions);
   }
 
   Future<void> _pickAndSend(BuildContext context, String kind) async {
@@ -1947,6 +1955,16 @@ class _AppDrawer extends StatelessWidget {
                     label: '群组管理',
                     onTap: () => _select(context, AppSection.groups),
                   ),
+                  _DrawerTile(
+                    section: AppSection.bots,
+                    current: state.currentSection,
+                    icon: Icons.smart_toy_rounded,
+                    label: 'Bot 管理中心',
+                    badge: state.botCenter.ownedBots.isEmpty
+                        ? null
+                        : '${state.botCenter.ownedBots.length}',
+                    onTap: () => _select(context, AppSection.bots),
+                  ),
                   const Divider(height: 26),
                   _DrawerTile(
                     section: AppSection.settings,
@@ -2085,6 +2103,10 @@ class _SectionContent extends StatelessWidget {
                         state: state,
                       ),
                       AppSection.groups => _GroupsSection(
+                        controller: controller,
+                        state: state,
+                      ),
+                      AppSection.bots => _BotCenterSection(
                         controller: controller,
                         state: state,
                       ),
@@ -2436,12 +2458,8 @@ class _GroupsSection extends StatelessWidget {
                 spacing: 8,
                 children: [
                   OutlinedButton(
-                    onPressed: () => _showConversationInfoDialog(
-                      context,
-                      controller,
-                      state,
-                      group,
-                    ),
+                    onPressed: () =>
+                        _openConversationInfoDialog(context, controller, group),
                     child: const Text('管理'),
                   ),
                   FilledButton.tonal(
@@ -2457,6 +2475,460 @@ class _GroupsSection extends StatelessWidget {
       ),
     );
   }
+}
+
+class _BotCenterSection extends StatelessWidget {
+  const _BotCenterSection({required this.controller, required this.state});
+
+  final AimController controller;
+  final AimState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final bot = state.botCenter;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _UserBotsPanel(controller: controller, state: state, bot: bot),
+        if (bot.plaintextToken.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          AimPanel(
+            child: SelectableText(
+              '新连接密钥（仅显示一次）：${bot.plaintextToken}',
+              style: const TextStyle(
+                color: AimColors.warning,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _UserBotsPanel extends StatelessWidget {
+  const _UserBotsPanel({
+    required this.controller,
+    required this.state,
+    required this.bot,
+  });
+
+  final AimController controller;
+  final AimState state;
+  final BotCenterState bot;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = bot.selectedOwnedBot;
+    final tokens = selected == null
+        ? const <UserBotTokenInfo>[]
+        : bot.tokensFor(selected.botUserId);
+    final availableGroups = selected == null
+        ? const <Conversation>[]
+        : state.conversations
+              .where(
+                (conversation) =>
+                    conversation.type == ConversationType.group &&
+                    conversation.isActive &&
+                    !conversation.memberIds.contains(selected.botUserId),
+              )
+              .toList();
+    return AimPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SectionTitle(
+            title: '我的 Bot',
+            subtitle: '创建和管理你的 Bot，并为 Bot 生成连接密钥。',
+            trailing: Wrap(
+              spacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: bot.isLoading
+                      ? null
+                      : () => controller.loadUserBots(),
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('刷新'),
+                ),
+                FilledButton.icon(
+                  onPressed: bot.isLoading
+                      ? null
+                      : () => _showCreateUserBotDialog(context, controller),
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('新建 Bot'),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (bot.ownedBots.isEmpty)
+            const EmptyState(
+              icon: Icons.smart_toy_rounded,
+              title: '暂无 Bot',
+              subtitle: '创建一个 Bot 后，可生成连接密钥并加入会话。',
+            )
+          else ...[
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                for (final item in bot.ownedBots)
+                  ChoiceChip(
+                    selected: item.botUserId == bot.selectedOwnedBotId,
+                    label: Text('${item.nickname} · ${item.statusLabel}'),
+                    avatar: const Icon(Icons.smart_toy_rounded, size: 18),
+                    onSelected: (_) =>
+                        controller.selectOwnedBot(item.botUserId),
+                  ),
+              ],
+            ),
+            if (selected != null) ...[
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  StatusPill(label: 'Bot ID ${selected.botUserId}'),
+                  StatusPill(
+                    label: selected.statusLabel,
+                    color: selected.isEnabled
+                        ? AimColors.success
+                        : AimColors.warning,
+                  ),
+                  StatusPill(label: '${tokens.length} 个连接密钥'),
+                  OutlinedButton.icon(
+                    onPressed: () =>
+                        controller.createDirectConversationWithUserBot(
+                          selected.botUserId,
+                        ),
+                    icon: const Icon(Icons.chat_rounded),
+                    label: const Text('开启直聊'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: availableGroups.isEmpty
+                        ? null
+                        : () => _showAddBotToConversationDialog(
+                            context,
+                            controller,
+                            selected,
+                            availableGroups,
+                          ),
+                    icon: const Icon(Icons.group_add_rounded),
+                    label: const Text('加入群聊'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: bot.isLoading
+                        ? null
+                        : () => controller.toggleUserBotEnabled(selected),
+                    icon: Icon(
+                      selected.isEnabled
+                          ? Icons.pause_circle_outline_rounded
+                          : Icons.play_circle_outline_rounded,
+                    ),
+                    label: Text(selected.isEnabled ? '停用' : '启用'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: bot.isLoading
+                        ? null
+                        : () => _showCreateBotTokenDialog(
+                            context,
+                            controller,
+                            bot,
+                            selected,
+                          ),
+                    icon: const Icon(Icons.key_rounded),
+                    label: const Text('生成连接密钥'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (tokens.isEmpty)
+                const Text('暂无连接密钥', style: TextStyle(color: AimColors.muted))
+              else
+                Column(
+                  children: [
+                    for (final token in tokens)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.key_rounded),
+                        title: Text(
+                          token.name.trim().isEmpty
+                              ? '连接密钥 ${token.tokenId}'
+                              : token.name,
+                        ),
+                        subtitle: Text(
+                          '${token.actions.length} 项权限 · ${_formatOptionalBotDate(token.expiresAt)}',
+                        ),
+                        trailing: Wrap(
+                          spacing: 8,
+                          children: [
+                            TextButton(
+                              onPressed: bot.isLoading
+                                  ? null
+                                  : () => controller.rotateUserBotToken(
+                                      botUserId: selected.botUserId,
+                                      tokenId: token.tokenId,
+                                    ),
+                              child: const Text('更新'),
+                            ),
+                            TextButton(
+                              onPressed: bot.isLoading
+                                  ? null
+                                  : () => controller.revokeUserBotToken(
+                                      botUserId: selected.botUserId,
+                                      tokenId: token.tokenId,
+                                    ),
+                              child: const Text('撤销'),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+void _showCreateUserBotDialog(BuildContext context, AimController controller) {
+  final nameController = TextEditingController();
+  final emailController = TextEditingController();
+  showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('新建 Bot'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: nameController,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Bot 名称',
+              prefixIcon: Icon(Icons.smart_toy_rounded),
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: emailController,
+            decoration: const InputDecoration(
+              labelText: '邮箱（可选）',
+              prefixIcon: Icon(Icons.mail_outline_rounded),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final name = nameController.text;
+            final email = emailController.text;
+            Navigator.of(context).pop();
+            controller.createUserBot(nickname: name, email: email);
+          },
+          child: const Text('创建'),
+        ),
+      ],
+    ),
+  );
+}
+
+void _showAddBotToConversationDialog(
+  BuildContext context,
+  AimController controller,
+  UserBotInfo bot,
+  List<Conversation> groups,
+) {
+  var selectedConversationId = groups.first.id;
+  showDialog<void>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) {
+        return AlertDialog(
+          title: Text('将 ${bot.nickname} 加入群聊'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('选择一个你管理的群聊，将该 Bot 加入后，群成员可在正常聊天会话中与 Bot 互动。'),
+                const SizedBox(height: 12),
+                for (final group in groups)
+                  ListTile(
+                    selected: group.id == selectedConversationId,
+                    leading: Icon(
+                      group.id == selectedConversationId
+                          ? Icons.radio_button_checked_rounded
+                          : Icons.radio_button_off_rounded,
+                    ),
+                    title: Text(group.name),
+                    subtitle: Text(
+                      '${group.memberIds.length} 位成员 · ${group.isActive ? '正常' : '已归档'}',
+                    ),
+                    onTap: () =>
+                        setState(() => selectedConversationId = group.id),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                controller.addUserBotToConversation(
+                  botUserId: bot.botUserId,
+                  conversationId: selectedConversationId,
+                );
+              },
+              icon: const Icon(Icons.group_add_rounded),
+              label: const Text('加入'),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
+void _showCreateBotTokenDialog(
+  BuildContext context,
+  AimController controller,
+  BotCenterState bot,
+  UserBotInfo selectedBot,
+) {
+  final nameController = TextEditingController();
+  final selectedActions = <String>{
+    'bot.self.read',
+    'bot.conversation.list',
+    'bot.conversation.history',
+    'bot.message.send',
+  };
+  showDialog<void>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) {
+        return AlertDialog(
+          title: Text('为 ${selectedBot.nickname} 生成连接密钥'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: '名称（可选）',
+                    prefixIcon: Icon(Icons.label_outline_rounded),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final item in bot.tokenActionOptions)
+                        CheckboxListTile(
+                          value: selectedActions.contains(item.action),
+                          onChanged: (value) {
+                            setState(() {
+                              if (value == true) {
+                                selectedActions.add(item.action);
+                              } else {
+                                selectedActions.remove(item.action);
+                              }
+                            });
+                          },
+                          title: Text(_botActionLabel(item.action)),
+                          subtitle: item.description.trim().isEmpty
+                              ? null
+                              : Text(
+                                  _cleanBotCatalogDescription(item.description),
+                                ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: selectedActions.isEmpty
+                  ? null
+                  : () {
+                      final name = nameController.text;
+                      final actions = selectedActions.toList();
+                      Navigator.of(context).pop();
+                      controller.createUserBotToken(
+                        botUserId: selectedBot.botUserId,
+                        actions: actions,
+                        name: name,
+                      );
+                    },
+              child: const Text('生成'),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
+String _formatBotDate(DateTime value) {
+  final local = value.toLocal();
+  return '${local.month}/${local.day} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+}
+
+String _formatOptionalBotDate(DateTime? value) {
+  if (value == null) return '长期有效';
+  return '有效期至 ${_formatBotDate(value)}';
+}
+
+String _botActionLabel(String action) {
+  return switch (action) {
+    'bot.self.read' => '查看身份',
+    'bot.conversation.list' => '查看会话',
+    'bot.conversation.history' => '查看历史',
+    'bot.conversation.members.read' => '查看成员',
+    'bot.message.send' => '发送消息',
+    'bot.attachment.download' => '下载附件',
+    'bot.read_receipt.write' => '标记已读',
+    'bot.read_receipt.read' => '查看已读状态',
+    _ => '扩展权限',
+  };
+}
+
+String _cleanBotCatalogDescription(String value) {
+  var text = value.trim();
+  final replacements = <String, String>{
+    '接口': '功能',
+    '调用': '使用',
+    '请求': '操作',
+    '返回': '展示',
+    'OpenAPI': 'Bot 功能',
+    'Authorization': '连接密钥',
+  };
+  for (final entry in replacements.entries) {
+    text = text.replaceAll(entry.key, entry.value);
+  }
+  return text;
 }
 
 class _SettingsSection extends StatefulWidget {
@@ -2881,6 +3353,27 @@ void _showProfileDialog(
         ),
       ],
     ),
+  );
+}
+
+Future<void> _openConversationInfoDialog(
+  BuildContext context,
+  AimController controller,
+  Conversation conversation,
+) async {
+  if (conversation.type == ConversationType.group) {
+    await controller.loadConversationMembers(conversation.id);
+  }
+  if (!context.mounted) return;
+  final state = controller.state;
+  final latestConversation = state.conversations
+      .where((item) => item.id == conversation.id)
+      .firstOrNull;
+  _showConversationInfoDialog(
+    context,
+    controller,
+    state,
+    latestConversation ?? conversation,
   );
 }
 
@@ -3333,6 +3826,7 @@ String _sectionTitle(AppSection section) {
     AppSection.friends => '好友管理',
     AppSection.friendRequests => '好友申请',
     AppSection.groups => '群组管理',
+    AppSection.bots => 'Bot 管理中心',
     AppSection.settings => '设置',
     AppSection.feedback => '帮助与反馈',
     _ => '',
@@ -3346,6 +3840,7 @@ String _sectionSubtitle(AppSection section) {
     AppSection.friends => '搜索用户、发送好友申请、发起直聊。',
     AppSection.friendRequests => '处理收到或发出的好友申请。',
     AppSection.groups => '创建群聊、管理成员和群资料。',
+    AppSection.bots => '连接 Bot、配置回调、查看会话并发送消息。',
     AppSection.settings => '通知、快捷键、外观与连接策略。',
     AppSection.feedback => '帮助中心、问题反馈和状态上报。',
     _ => '',
@@ -3419,6 +3914,10 @@ String _dataUri(String mime, Uint8List bytes) {
 String _displayName(AimState state, int userId) {
   if (state.currentUser?.id == userId) {
     return state.currentUser?.nickname ?? '我';
+  }
+  final cachedMember = state.memberProfileById(userId);
+  if (cachedMember != null && cachedMember.nickname.trim().isNotEmpty) {
+    return cachedMember.nickname;
   }
   for (final friendship in [...state.friends, ...state.friendRequests]) {
     if (friendship.user.id == userId) return friendship.user.nickname;

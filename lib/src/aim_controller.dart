@@ -136,6 +136,9 @@ class AimController extends ChangeNotifier {
   void selectSection(AppSection section) {
     _state = _state.copyWith(currentSection: section);
     notifyListeners();
+    if (section == AppSection.bots && _state.botCenter.ownedBots.isEmpty) {
+      unawaited(loadUserBots(silent: true));
+    }
   }
 
   void updateSearchQuery(String value) {
@@ -155,6 +158,28 @@ class AimController extends ChangeNotifier {
     );
     _markMessagesRead(conversationId);
     notifyListeners();
+    final selectedConversation = _state.selectedConversation;
+    if (selectedConversation?.type == ConversationType.group) {
+      unawaited(loadConversationMembers(conversationId));
+    }
+  }
+
+  Future<void> loadConversationMembers(int conversationId) async {
+    if (conversationId <= 0) return;
+    try {
+      final members = await _activeRepository.getConversationMembers(
+        conversationId,
+      );
+      _state = _state.copyWith(
+        conversationMembersById: {
+          ..._state.conversationMembersById,
+          conversationId: members,
+        },
+      );
+      notifyListeners();
+    } catch (error) {
+      _emitNotice(_readableError(error));
+    }
   }
 
   void clearSelectedConversation() {
@@ -202,7 +227,10 @@ class AimController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> sendTextMessage(String rawText) async {
+  Future<void> sendTextMessage(
+    String rawText, {
+    List<String> mentions = const [],
+  }) async {
     final text = rawText.trim();
     if (text.isEmpty) return;
     // Frame size check per manual §15.4 (WS max 1024 bytes)
@@ -230,6 +258,7 @@ class AimController extends ChangeNotifier {
       clientMessageId: clientMessageId,
       status: MessageStatus.sending,
       readBy: [currentUser.id],
+      mentions: mentions,
     );
     _appendMessage(pendingMessage);
     _upsertConversation(
@@ -248,6 +277,7 @@ class AimController extends ChangeNotifier {
         content: text,
         clientMessageId: clientMessageId,
         createdAt: createdAt,
+        mentions: mentions,
       );
       // ACK status differentiation per manual §5.3
       _handleSendAck(clientMessageId, pendingMessage, result);
@@ -995,10 +1025,7 @@ class AimController extends ChangeNotifier {
   /// 清除聚合搜索结果。
   void clearSearchResults() {
     if (_state.searchResults == null && !_state.isSearching) return;
-    _state = _state.copyWith(
-      searchResults: null,
-      isSearching: false,
-    );
+    _state = _state.copyWith(searchResults: null, isSearching: false);
     notifyListeners();
   }
 
@@ -1027,7 +1054,8 @@ class AimController extends ChangeNotifier {
       if (result.isEmpty) {
         _emitNotice('未找到匹配结果');
       } else {
-        final count = result.users.length +
+        final count =
+            result.users.length +
             result.friends.length +
             result.conversations.length +
             result.messages.length;
@@ -1073,6 +1101,343 @@ class AimController extends ChangeNotifier {
     }
   }
 
+  Future<void> loadUserBots({bool silent = false}) async {
+    _state = _state.copyWith(
+      botCenter: _state.botCenter.copyWith(isLoading: true, plaintextToken: ''),
+    );
+    notifyListeners();
+    try {
+      final results = await Future.wait<Object>([
+        _activeRepository.listUserBots(),
+        _activeRepository.listBotActions(),
+      ]);
+      final bots = results[0] as List<UserBotInfo>;
+      final actions = results[1] as List<BotActionCatalogItem>;
+      final selectedId = _state.botCenter.selectedOwnedBotId;
+      final nextSelectedId = bots.any((bot) => bot.botUserId == selectedId)
+          ? selectedId
+          : (bots.isEmpty ? null : bots.first.botUserId);
+      final tokensByBot = <int, List<UserBotTokenInfo>>{
+        ..._state.botCenter.botTokensByBot,
+      };
+      if (nextSelectedId != null) {
+        tokensByBot[nextSelectedId] = await _activeRepository.listUserBotTokens(
+          nextSelectedId,
+        );
+      }
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(
+          isLoading: false,
+          ownedBots: bots,
+          selectedOwnedBotId: nextSelectedId,
+          botTokensByBot: tokensByBot,
+          availableActions: actions,
+          plaintextToken: '',
+        ),
+      );
+      notifyListeners();
+    } catch (error) {
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(isLoading: false),
+      );
+      notifyListeners();
+      if (!silent) _emitNotice(_readableError(error));
+    }
+  }
+
+  void selectOwnedBot(int botUserId) {
+    _state = _state.copyWith(
+      botCenter: _state.botCenter.copyWith(
+        selectedOwnedBotId: botUserId,
+        plaintextToken: '',
+      ),
+    );
+    notifyListeners();
+    unawaited(loadUserBotTokens(botUserId));
+  }
+
+  Future<void> loadUserBotTokens(int botUserId) async {
+    if (botUserId <= 0) return;
+    _state = _state.copyWith(
+      botCenter: _state.botCenter.copyWith(isLoading: true, plaintextToken: ''),
+    );
+    notifyListeners();
+    try {
+      final tokens = await _activeRepository.listUserBotTokens(botUserId);
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(
+          isLoading: false,
+          botTokensByBot: {
+            ..._state.botCenter.botTokensByBot,
+            botUserId: tokens,
+          },
+        ),
+      );
+      notifyListeners();
+    } catch (error) {
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(isLoading: false),
+      );
+      notifyListeners();
+      _emitNotice(_readableError(error));
+    }
+  }
+
+  Future<void> createUserBot({
+    required String nickname,
+    String email = '',
+    String avatarUrl = '',
+  }) async {
+    final trimmed = nickname.trim();
+    if (trimmed.isEmpty) {
+      _emitNotice('请输入 Bot 名称');
+      return;
+    }
+    _state = _state.copyWith(
+      botCenter: _state.botCenter.copyWith(isLoading: true, plaintextToken: ''),
+    );
+    notifyListeners();
+    try {
+      final bot = await _activeRepository.createUserBot(
+        nickname: trimmed,
+        email: email,
+        avatarUrl: avatarUrl,
+      );
+      final bots = [
+        bot,
+        ..._state.botCenter.ownedBots.where(
+          (item) => item.botUserId != bot.botUserId,
+        ),
+      ];
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(
+          isLoading: false,
+          ownedBots: bots,
+          selectedOwnedBotId: bot.botUserId,
+        ),
+      );
+      notifyListeners();
+      _emitNotice('Bot 已创建');
+      unawaited(loadUserBotTokens(bot.botUserId));
+    } catch (error) {
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(isLoading: false),
+      );
+      notifyListeners();
+      _emitNotice(_readableError(error));
+    }
+  }
+
+  Future<void> toggleUserBotEnabled(UserBotInfo bot) async {
+    _state = _state.copyWith(
+      botCenter: _state.botCenter.copyWith(isLoading: true, plaintextToken: ''),
+    );
+    notifyListeners();
+    try {
+      final updated = bot.isEnabled
+          ? await _activeRepository.disableUserBot(bot.botUserId)
+          : await _activeRepository.enableUserBot(bot.botUserId);
+      final bots = _state.botCenter.ownedBots
+          .map((item) => item.botUserId == updated.botUserId ? updated : item)
+          .toList();
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(isLoading: false, ownedBots: bots),
+      );
+      notifyListeners();
+      _emitNotice(updated.isEnabled ? 'Bot 已启用' : 'Bot 已停用');
+    } catch (error) {
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(isLoading: false),
+      );
+      notifyListeners();
+      _emitNotice(_readableError(error));
+    }
+  }
+
+  Future<void> createUserBotToken({
+    required int botUserId,
+    required List<String> actions,
+    String name = '',
+  }) async {
+    final normalizedActions = actions
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet()
+        .toList();
+    if (botUserId <= 0 || normalizedActions.isEmpty) {
+      _emitNotice('请选择 Bot 与权限');
+      return;
+    }
+    _state = _state.copyWith(
+      botCenter: _state.botCenter.copyWith(isLoading: true, plaintextToken: ''),
+    );
+    notifyListeners();
+    try {
+      final result = await _activeRepository.createUserBotToken(
+        botUserId: botUserId,
+        actions: normalizedActions,
+        name: name,
+      );
+      final tokens = [
+        result.token,
+        ..._state.botCenter
+            .tokensFor(botUserId)
+            .where((item) => item.tokenId != result.token.tokenId),
+      ];
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(
+          isLoading: false,
+          botTokensByBot: {
+            ..._state.botCenter.botTokensByBot,
+            botUserId: tokens,
+          },
+          plaintextToken: result.plaintextToken,
+        ),
+      );
+      notifyListeners();
+      _emitNotice('连接密钥已创建，请立即保存');
+    } catch (error) {
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(isLoading: false),
+      );
+      notifyListeners();
+      _emitNotice(_readableError(error));
+    }
+  }
+
+  Future<void> rotateUserBotToken({
+    required int botUserId,
+    required int tokenId,
+  }) async {
+    _state = _state.copyWith(
+      botCenter: _state.botCenter.copyWith(isLoading: true, plaintextToken: ''),
+    );
+    notifyListeners();
+    try {
+      final result = await _activeRepository.rotateUserBotToken(
+        botUserId: botUserId,
+        tokenId: tokenId,
+      );
+      final tokens = _state.botCenter
+          .tokensFor(botUserId)
+          .map((item) => item.tokenId == tokenId ? result.token : item)
+          .toList();
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(
+          isLoading: false,
+          botTokensByBot: {
+            ..._state.botCenter.botTokensByBot,
+            botUserId: tokens,
+          },
+          plaintextToken: result.plaintextToken,
+        ),
+      );
+      notifyListeners();
+      _emitNotice('连接密钥已更新，请立即保存');
+    } catch (error) {
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(isLoading: false),
+      );
+      notifyListeners();
+      _emitNotice(_readableError(error));
+    }
+  }
+
+  Future<void> revokeUserBotToken({
+    required int botUserId,
+    required int tokenId,
+  }) async {
+    _state = _state.copyWith(
+      botCenter: _state.botCenter.copyWith(isLoading: true, plaintextToken: ''),
+    );
+    notifyListeners();
+    try {
+      await _activeRepository.revokeUserBotToken(
+        botUserId: botUserId,
+        tokenId: tokenId,
+      );
+      final tokens = _state.botCenter
+          .tokensFor(botUserId)
+          .where((item) => item.tokenId != tokenId)
+          .toList();
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(
+          isLoading: false,
+          botTokensByBot: {
+            ..._state.botCenter.botTokensByBot,
+            botUserId: tokens,
+          },
+        ),
+      );
+      notifyListeners();
+      _emitNotice('连接密钥已撤销');
+    } catch (error) {
+      _state = _state.copyWith(
+        botCenter: _state.botCenter.copyWith(isLoading: false),
+      );
+      notifyListeners();
+      _emitNotice(_readableError(error));
+    }
+  }
+
+  Future<void> addUserBotToConversation({
+    required int botUserId,
+    required int conversationId,
+  }) async {
+    if (botUserId <= 0 || conversationId <= 0) return;
+    try {
+      final updated = await _activeRepository.addUserBotToConversation(
+        botUserId: botUserId,
+        conversationId: conversationId,
+      );
+      final existing = _state.conversations
+          .where((item) => item.id == conversationId)
+          .firstOrNull;
+      _upsertConversation(
+        existing == null
+            ? updated
+            : existing.copyWith(
+                name: updated.name.trim().isEmpty
+                    ? existing.name
+                    : updated.name,
+                avatarText: updated.avatarText.trim().isEmpty
+                    ? existing.avatarText
+                    : updated.avatarText,
+                memberIds: updated.memberIds.isEmpty
+                    ? <int>{...existing.memberIds, botUserId}.toList()
+                    : updated.memberIds,
+                updatedAt: updated.updatedAt,
+                lastMessagePreview: updated.lastMessagePreview.trim().isEmpty
+                    ? 'Bot 已加入会话'
+                    : updated.lastMessagePreview,
+                ownerId: updated.ownerId ?? existing.ownerId,
+              ),
+      );
+      unawaited(loadConversationMembers(conversationId));
+      _appendSystemMessage(conversationId, 'Bot 已加入会话');
+      _emitNotice('Bot 已加入会话');
+    } catch (error) {
+      _emitNotice(_readableError(error));
+    }
+  }
+
+  Future<void> createDirectConversationWithUserBot(int botUserId) async {
+    if (botUserId <= 0) return;
+    try {
+      final conversation = await _activeRepository
+          .createUserBotDirectConversation(botUserId);
+      _upsertConversation(conversation);
+      _state = _state.copyWith(
+        currentSection: AppSection.chats,
+        selectedConversationId: conversation.id,
+      );
+      notifyListeners();
+      _emitNotice('已打开 Bot 会话');
+    } catch (error) {
+      _emitNotice(_readableError(error));
+    }
+  }
+
   Future<void> _loadAuthenticatedState(
     AuthSession session,
     String message,
@@ -1088,6 +1453,7 @@ class AimController extends ChangeNotifier {
       // Token persistence is optional (e.g. in test environments)
     }
     _startTokenRefreshTimer(session.expiresAt);
+    unawaited(loadUserBots(silent: true));
 
     // 阶段 1：优先从本地缓存加载，让用户立即看到上次的会话和消息
     bool loadedFromCache = false;
@@ -1311,7 +1677,10 @@ class AimController extends ChangeNotifier {
     }
 
     // 一次性的精确定时（过期前 60s）
-    _tokenRefreshTimer = Timer(delay, () => unawaited(_refreshTokenWithRetry()));
+    _tokenRefreshTimer = Timer(
+      delay,
+      () => unawaited(_refreshTokenWithRetry()),
+    );
 
     // 安全巡检：每 30s 检查一次，防止 Timer 被 OS 延迟
     final safetyInterval = delay > defaultTokenSafetyInterval
@@ -1325,7 +1694,8 @@ class AimController extends ChangeNotifier {
           return;
         }
         final remaining =
-            updatedSession.expiresAt.difference(DateTime.now()) - _tokenRefetchMargin;
+            updatedSession.expiresAt.difference(DateTime.now()) -
+            _tokenRefetchMargin;
         if (remaining <= Duration.zero) {
           _stopTokenRefreshTimer();
           unawaited(_refreshTokenWithRetry());
@@ -1353,7 +1723,7 @@ class AimController extends ChangeNotifier {
     } catch (error) {
       _tokenRefreshRetries++;
       if (_tokenRefreshRetries > _maxTokenRefreshRetries) {
-        _emitNotice('Token 刷新失败已达上限，请手动检查连接');
+        _emitNotice('登录状态刷新失败，请手动检查连接');
         _tokenRefreshRetries = 0;
         if (_isAuthError(error)) {
           await _forceLogout('登录已过期，请重新登录');
@@ -1362,7 +1732,9 @@ class AimController extends ChangeNotifier {
       }
       // 退避：1s, 2s, 4s（最多 3 次重试）
       final backoff = Duration(seconds: 1 << (_tokenRefreshRetries - 1));
-      _emitNotice('Token 刷新失败，${backoff.inSeconds}s 后重试（$_tokenRefreshRetries/$_maxTokenRefreshRetries）');
+      _emitNotice(
+        '登录状态刷新失败，${backoff.inSeconds}s 后重试（$_tokenRefreshRetries/$_maxTokenRefreshRetries）',
+      );
       Future<void>.delayed(backoff, () => _refreshTokenWithRetry());
     }
   }
@@ -1847,6 +2219,10 @@ class AimController extends ChangeNotifier {
     if (_state.currentUser?.id == userId) {
       return _state.currentUser?.nickname ?? '我';
     }
+    final cachedMember = _state.memberProfileById(userId);
+    if (cachedMember != null && cachedMember.nickname.trim().isNotEmpty) {
+      return cachedMember.nickname;
+    }
     for (final friendship in [..._state.friends, ..._state.friendRequests]) {
       if (friendship.user.id == userId) return friendship.user.nickname;
     }
@@ -1984,6 +2360,17 @@ class AimController extends ChangeNotifier {
 
   String _readableError(Object error) {
     if (error is ArgumentError) return error.message.toString();
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map) {
+        final code = data['code'];
+        final msg = data['msg'];
+        if (msg != null) return '操作失败：$msg${code == null ? '' : '（$code）'}';
+      }
+      final statusCode = error.response?.statusCode;
+      if (statusCode != null) return '操作失败：HTTP $statusCode';
+      return '操作失败：网络请求异常';
+    }
     return '操作失败：$error';
   }
 
